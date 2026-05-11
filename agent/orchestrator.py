@@ -41,10 +41,16 @@ def run_morning(dry_run: bool = False):
 
     # Step 3: Send emails to experts
     print("[3/3] Sending verification emails to experts...")
-    from agent.email_sender import send_questions_to_experts
-    tracking = send_questions_to_experts(questions, results)
-    sent_count = sum(1 for v in tracking.values() if v is not None)
-    print(f"  Sent {sent_count}/{len(tracking)} emails")
+    if dry_run:
+        print("  [DRY RUN] Would send emails to:")
+        for q in questions:
+            print(f"    → {q['expert_name']} <{q['expert_email']}>: {q['question'][:50]}...")
+        tracking = {}
+    else:
+        from agent.email_sender import send_questions_to_experts
+        tracking = send_questions_to_experts(questions, results)
+        sent_count = sum(1 for v in tracking.values() if v is not None)
+        print(f"  Sent {sent_count}/{len(tracking)} emails")
 
     return questions, results
 
