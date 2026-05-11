@@ -11,8 +11,8 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
 
 from src.tools.db_connector import create_connector_from_config, DBConnectorError
-from agent.config import MAX_RESULT_ROWS, DASHSCOPE_CONFIG
-import requests
+from agent.config import MAX_RESULT_ROWS
+from agent.llm_client import chat as llm_chat
 import json
 import re
 
@@ -69,25 +69,11 @@ Hint fields: {question.get('fields_hint', '')}
 Expected output: {question.get('expected_output_type', '')}"""
 
     try:
-        resp = requests.post(
-            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {DASHSCOPE_CONFIG['api_key']}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": DASHSCOPE_CONFIG["model"],
-                "messages": [
-                    {"role": "system", "content": "You are a SQL expert. Reply with ONLY the SQL query, no markdown, no backticks, no explanations."},
-                    {"role": "user", "content": prompt},
-                ],
-                "temperature": 0.1,
-            },
-            timeout=120,
-        )
-        data = resp.json()
-        sql = data["choices"][0]["message"]["content"].strip()
-        # Clean up
+        sql = llm_chat(
+            system_prompt="You are a SQL expert. Reply with ONLY the SQL query, no markdown, no backticks, no explanations.",
+            user_message=prompt,
+            temperature=0.1,
+        ).strip()
         sql = re.sub(r'^```(?:sql)?\s*', '', sql)
         sql = re.sub(r'\s*```$', '', sql)
         sql = sql.strip().rstrip(";")

@@ -10,9 +10,8 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional
 
-import requests
-
-from agent.config import KB_2026_PATH, KB_2025_PATH, DASHSCOPE_CONFIG, QUESTIONS_PER_DAY
+from agent.config import KB_2026_PATH, KB_2025_PATH, QUESTIONS_PER_DAY
+from agent.llm_client import chat as llm_chat
 
 
 def _find_md_files(base_path: str, limit: int = 5) -> list[dict]:
@@ -94,28 +93,12 @@ def _read_doc_sample(filepath: str, max_lines: int = 150) -> dict:
 
 
 def _call_llm(prompt: str) -> str:
-    """Call DashScope Qwen API."""
-    try:
-        resp = requests.post(
-            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {DASHSCOPE_CONFIG['api_key']}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": DASHSCOPE_CONFIG["model"],
-                "messages": [
-                    {"role": "system", "content": "You are a data analyst for a fresh-food supermarket chain. You understand retail KPIs and SQL. Respond in Chinese. Output ONLY valid JSON — no other text, no markdown fences."},
-                    {"role": "user", "content": prompt},
-                ],
-                "temperature": 0.8,
-            },
-            timeout=120,
-        )
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
-    except Exception as e:
-        raise RuntimeError(f"LLM call failed: {e}")
+    """Call LLM via Anthropic SDK (DeepSeek V4 Pro backend)."""
+    return llm_chat(
+        system_prompt="You are a data analyst for a fresh-food supermarket chain. You understand retail KPIs and SQL. Respond in Chinese. Output ONLY valid JSON — no other text, no markdown fences.",
+        user_message=prompt,
+        temperature=0.8,
+    )
 
 
 def _classify_domain_fast(question: str) -> str:

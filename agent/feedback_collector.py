@@ -15,8 +15,8 @@ _KB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 if os.path.isdir(_KB_PATH):
     sys.path.insert(0, _KB_PATH)
 
-from agent.config import MAIL_CONFIG, DASHSCOPE_CONFIG, STATE_FILE
-import requests
+from agent.config import MAIL_CONFIG, STATE_FILE
+from agent.llm_client import chat as llm_chat
 
 
 def _get_imap_client():
@@ -53,23 +53,11 @@ Classify as exactly one of:
 Reply with just one word: correct, incorrect, or unclear."""
 
     try:
-        resp = requests.post(
-            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {DASHSCOPE_CONFIG['api_key']}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": DASHSCOPE_CONFIG["model"],
-                "messages": [
-                    {"role": "system", "content": "You are a classification assistant. Reply with exactly one word."},
-                    {"role": "user", "content": prompt},
-                ],
-                "temperature": 0.1,
-            },
-            timeout=60,
-        )
-        result = resp.json()["choices"][0]["message"]["content"].strip().lower()
+        result = llm_chat(
+            system_prompt="You are a classification assistant. Reply with exactly one word.",
+            user_message=prompt,
+            temperature=0.1,
+        ).strip().lower()
         if "incorrect" in result:
             return "incorrect"
         elif "unclear" in result:

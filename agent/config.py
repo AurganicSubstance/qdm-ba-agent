@@ -27,12 +27,6 @@ MAIL_CONFIG = {
     "sender_name": "取数验证Agent",
 }
 
-# ── DashScope API ──
-DASHSCOPE_CONFIG = {
-    "api_key": os.getenv("DASHSCOPE_API_KEY", "sk-658376c6e57c4f31a090ecc92e6b0236"),
-    "model": "qwen-plus",
-}
-
 # ── Experts routing (domain → expert) ──
 EXPERT_ROUTING = {
     "商品": {"name": "刘阗", "email": "liutian1@qdama.cn"},

@@ -9,8 +9,8 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from agent.config import PROJECT_ROOT, EVOLUTION_LOG, DASHSCOPE_CONFIG
-import requests
+from agent.config import PROJECT_ROOT, EVOLUTION_LOG
+from agent.llm_client import chat_json as llm_chat_json
 
 SKILL_DIR = PROJECT_ROOT / "skills" / "data-query"
 SKILL_MD = SKILL_DIR / "SKILL.md"
@@ -107,26 +107,11 @@ Reply with JSON:
  "content_to_add": "the markdown content to append to the file"}}"""
 
     try:
-        resp = requests.post(
-            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {DASHSCOPE_CONFIG['api_key']}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": DASHSCOPE_CONFIG["model"],
-                "messages": [
-                    {"role": "system", "content": "You are a technical documentation assistant. Reply with valid JSON only, no markdown fences."},
-                    {"role": "user", "content": prompt},
-                ],
-                "temperature": 0.3,
-            },
-            timeout=120,
+        return llm_chat_json(
+            system_prompt="You are a technical documentation assistant. Reply with valid JSON only, no markdown fences.",
+            user_message=prompt,
+            temperature=0.3,
         )
-        raw = resp.json()["choices"][0]["message"]["content"].strip()
-        raw = re.sub(r'^```(?:json)?\s*', '', raw)
-        raw = re.sub(r'\s*```$', '', raw)
-        return json.loads(raw)
     except Exception as e:
         return {"action": "none", "description": f"LLM analysis failed: {e}", "content_to_add": ""}
 
