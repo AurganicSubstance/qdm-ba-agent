@@ -97,7 +97,7 @@ def send_questions_to_experts(questions: list[dict], results: list[dict]) -> dic
 
     Returns: {question_id: message_id}
     """
-    mail = _get_mail_client()
+    mail = _SimpleMailClient()
     tracking = {}
 
     # Group questions by expert email
