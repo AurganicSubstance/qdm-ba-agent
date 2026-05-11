@@ -1,0 +1,6 @@
+.env
+__pycache__/
+*.pyc
+data/agent_state.json
+data/evolution_log.json
+*.log
