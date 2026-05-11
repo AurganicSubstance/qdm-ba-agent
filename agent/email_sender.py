@@ -6,6 +6,14 @@ Reuses the MailClient from the BAKnowledgeBase3.1 email_bot.
 import sys
 import os
 import json
+import smtplib
+import ssl
+import uuid
+import time
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.header import Header
+from email.utils import formataddr
 from datetime import datetime
 from typing import Optional
 
@@ -36,52 +44,29 @@ def _get_mail_client():
 
 class _SimpleMailClient:
     """Standalone SMTP-only mail client (no IMAP needed for sending)."""
-    def __init__(self):
-        import smtplib
-        import ssl
-        from email.mime.text import MIMEText
-        from email.mime.multipart import MIMEMultipart
-        from email.header import Header
-        from email.utils import formataddr
-        import uuid
-        import time
-        self._smtp_cls = smtplib.SMTP_SSL
-        self._mime_cls = MIMEMultipart
-        self._text_cls = MIMEText
-        self._header_cls = Header
-        self._formataddr = formataddr
-        self._uuid = uuid
-        self._time = time
-        self._ssl = ssl
 
     def send_email(self, to, subject, body, cc=None, content_type="html", sender_name=""):
-        import smtplib as _smtplib
-        from email.mime.text import MIMEText as _MIMEText
-        from email.mime.multipart import MIMEMultipart as _MIMEMultipart
-        from email.header import Header as _Header
-        from email.utils import formataddr as _formataddr
-        import uuid as _uuid, time as _time, ssl as _ssl
-
         domain = MAIL_CONFIG["username"].split("@")[1]
-        message_id = f"<{_uuid.uuid4().hex}.{int(_time.time())}@{domain}>"
+        message_id = "<{}.{}@{}>".format(uuid.uuid4().hex, int(time.time()), domain)
 
-        msg = _MIMEMultipart()
-        msg["From"] = _formataddr((sender_name or MAIL_CONFIG["sender_name"], MAIL_CONFIG["username"]))
+        msg = MIMEMultipart()
+        msg["From"] = formataddr((sender_name or MAIL_CONFIG["sender_name"], MAIL_CONFIG["username"]))
         msg["To"] = to
-        msg["Subject"] = _Header(subject, "utf-8")
+        msg["Subject"] = Header(subject, "utf-8")
         msg["Message-ID"] = message_id
         msg["Reply-To"] = MAIL_CONFIG["username"]
         if cc:
             msg["Cc"] = ", ".join(cc)
 
-        msg.attach(_MIMEText(body, content_type, "utf-8"))
+        msg.attach(MIMEText(body, content_type, "utf-8"))
 
         try:
-            ctx = _ssl.create_default_context()
-            with _smtplib.SMTP_SSL(MAIL_CONFIG["smtp_host"], MAIL_CONFIG["smtp_port"], context=ctx) as smtp:
-                smtp.login(MAIL_CONFIG["username"], MAIL_CONFIG["password"])
-                recipients = [to] + (cc or [])
-                smtp.sendmail(MAIL_CONFIG["username"], recipients, msg.as_bytes())
+            ctx = ssl.create_default_context()
+            server = smtplib.SMTP_SSL(MAIL_CONFIG["smtp_host"], MAIL_CONFIG["smtp_port"], context=ctx)
+            server.login(MAIL_CONFIG["username"], MAIL_CONFIG["password"])
+            recipients = [to] + (cc or [])
+            server.sendmail(MAIL_CONFIG["username"], recipients, msg.as_bytes())
+            server.quit()
         except Exception as e:
             raise RuntimeError(f"SMTP send failed: {e}")
 
