@@ -42,7 +42,23 @@
       "Bash(Write-Output \"---\")",
       "Bash(Get-ChildItem -Path app/jobs -Recurse -Name)",
       "Bash(copy \"c:\\\\Users\\\\tommy\\\\Documents\\\\Projects\\\\QDM BA Agent\\\\db_connector.py\" \"c:\\\\Users\\\\tommy\\\\Documents\\\\Projects\\\\QDM BA Agent\\\\src\\\\tools\\\\db_connector.py\")",
-      "PowerShell($skillsDir = \"$env:USERPROFILE\\\\.claude\\\\skills\"; if \\(-not \\(Test-Path $skillsDir\\)\\) { New-Item -ItemType Directory -Path $skillsDir -Force }; Get-ChildItem $skillsDir -Recurse -Depth 2 2>$null; echo \"---\"; Get-ChildItem \"c:\\\\Users\\\\tommy\\\\Documents\\\\Projects\\\\QDM BA Agent\\\\.claude\" -Recurse -Depth 2 2>$null)"
+      "PowerShell($skillsDir = \"$env:USERPROFILE\\\\.claude\\\\skills\"; if \\(-not \\(Test-Path $skillsDir\\)\\) { New-Item -ItemType Directory -Path $skillsDir -Force }; Get-ChildItem $skillsDir -Recurse -Depth 2 2>$null; echo \"---\"; Get-ChildItem \"c:\\\\Users\\\\tommy\\\\Documents\\\\Projects\\\\QDM BA Agent\\\\.claude\" -Recurse -Depth 2 2>$null)",
+      "Bash(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new root@8.138.41.205 \"echo 'SSH OK' && uname -a\")",
+      "PowerShell(Get-Content \"$env:USERPROFILE\\\\.claude\\\\credentials.json\" -ErrorAction SilentlyContinue | Select-String \"apiKey|ANTHROPIC\")",
+      "Bash(rm -rf \".claude/skills/dataqueryplus\" && echo \"Removed dataqueryplus\")",
+      "Bash(Get-ChildItem -Path \".claude\\\\skills\" -Recurse -Depth 2)",
+      "Bash(Select-Object Mode, LastWriteTime, Length, FullName)",
+      "Edit(/.claude/skills/dataqueryplus/**)",
+      "Bash(mv agent/orchestrator.py agent/orchestrator_legacy.py)",
+      "Bash(ls run_daily.sh)",
+      "Bash(python -m agent.tools.db_query *)",
+      "Bash(python -m agent.tools.send_email *)",
+      "Bash(python -m agent.tools.check_feedback *)",
+      "Bash(python -m agent.tools.manage_state *)",
+      "Bash(bash run_morning.sh)",
+      "Bash(bash run_heartbeat.sh)",
+      "Edit(.claude/skills/dataqueryplus/references/**)",
+      "Edit(CLAUDE.md)"
     ],
     "deny": [
       "Bash(rm -rf /*)",
@@ -68,6 +84,9 @@
       "PowerShell(Clear-RecycleBin *)",
       "Read(~/.ssh/**)",
       "Read(~/.aws/**)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\tommy\\Documents\\Projects\\QDM BA Agent\\.claude\\skills"
     ]
   }
 }
