@@ -1,6 +1,6 @@
 ---
 name: dataqueryplus
-description: 增强版数据查询，支持大妈（商分数据库）和翠花双品牌取数。触发：用户说"取数"、"查数据"、"SQL"、"表结构"、"大妈"、"翠花"时使用。默认查大妈表，用户明确说"翠花"时切换到翠花表。
+description: 增强版数据查询，使用大妈（商分数据库）取数。触发：用户说"取数"、"查数据"、"SQL"、"表结构"、"大妈"时使用。
 ---
 
 ## 快速开始
@@ -31,12 +31,7 @@ python skills/dataqueryplus/db_query.py "SELECT * FROM default_catalog.ads_busin
 
 ## 品牌路由
 
-| 用户表达 | 路由到 | 表范围 |
-|---------|-------|--------|
-| 大妈、商分、默认（没说翠花） | **大妈表** | 运营 + 商品模块 |
-| 翠花 | **翠花表** | strategy_fm_levels_result + store_transaction_details |
-
-> 用户只说"取数"、"查数据"等通用词 → 默认走**大妈**。
+> 所有查询默认使用**大妈**表体系（运营 + 商品模块）。
 
 ---
 
@@ -66,7 +61,7 @@ python skills/dataqueryplus/db_query.py "SELECT * FROM default_catalog.ads_busin
 
 ### 大妈表核心特点
 
-1. **字段名全中文**（与翠花英文蛇形命名不同）
+1. **字段名全中文**（运营表）
 2. **百分比是字符串** `'19.77%'`，计算需 `CAST(REPLACE(字段名,'%','') AS DOUBLE)/100`
 3. **日期是 timestamp 毫秒**，筛选用 `FROM_UNIXTIME(日期/1000, 'yyyy-MM-dd')`
 4. **运营宽表层级** 由 `品类分层` 控制（门店/大分类/中分类/小分类/sku）
@@ -77,35 +72,16 @@ python skills/dataqueryplus/db_query.py "SELECT * FROM default_catalog.ads_busin
 
 ---
 
-## 翠花表体系
-
-当用户明确说"翠花"时使用，走原有 data-query skill 的两张表：
-
-| 表名 | 用途 |
-|-----|------|
-| strategy_fm_levels_result | 商品经营分析主表 |
-| store_transaction_details | 订单明细表 |
-
-> 翠花表的字段说明和 SQL 模板见 `skills/data-query/references/` 目录。
-> 封装方法 `db.get_user_order_data()` 和 `db.get_category_sales_data()` 仅适用于翠花。
-
----
-
 ## 执行步骤
 
-### Step 1: 判断品牌
-
-- 用户提到"翠花" → 走翠花表体系
-- 用户提到"大妈" 或 未指明 → 走大妈表体系
-
-### Step 2: 确认数据需求
+### Step 1: 确认数据需求
 
 - 分析目标（门店经营？商品排行？损耗分析？）
 - 时间范围
 - 区域/门店筛选
 - 返回字段
 
-### Step 3: 选表
+### Step 2: 选表
 
 **大妈运营场景：**
 
@@ -127,11 +103,11 @@ python skills/dataqueryplus/db_query.py "SELECT * FROM default_catalog.ads_busin
 | 价格竞争力 | product_center_business_sku_v3_info_di |
 | 必采分析 | product_center_business_sku_v3_info_di |
 
-### Step 4: 构建 SQL 并执行
+### Step 3: 构建 SQL 并执行
 
 > SQL 模板见 [references/sql_templates.md](references/sql_templates.md)
 
-### Step 5: 返回结果
+### Step 4: 返回结果
 
 返回结果是 Python 列表，每行一个字典：
 
@@ -144,21 +120,20 @@ df = pd.DataFrame(result)
 
 ## 注意事项
 
-| 项目 | 大妈表 | 翠花表 |
-|-----|-------|-------|
-| 字段名格式 | 中文 | 英文下划线 |
-| 百分比 | 字符串 `'19.77%'` | 小数 `0.1977` |
-| 日期格式 | timestamp 毫秒 | 字符串 `'YYYY-MM-DD'` |
-| 品类层级 | `品类分层` 字段 | `level_description` 字段 |
-| 封装方法 | 无（用 execute_query） | get_user_order_data / get_category_sales_data |
-| 数据量限制 | 单次 50,000 条 | 单次 50,000 条 |
-| 超时 | 300 秒 | 300 秒 |
+| 项目 | 说明 |
+|-----|------|
+| 字段名格式 | 中文（运营表）/ 英文（商品表） |
+| 百分比 | 运营表返回字符串 `'19.77%'`，需 CAST 处理 |
+| 日期格式 | timestamp 毫秒，筛选用 `FROM_UNIXTIME(日期/1000, 'yyyy-MM-dd')` |
+| 品类层级 | 运营表用 `品类分层` 字段 |
+| 数据量限制 | 单次 50,000 条 |
+| 超时 | 300 秒 |
 
 ---
 
 ## 环境配置
 
-与翠花共用数据库连接，`.env` 配置不变：
+数据库连接通过 `.env` 配置：
 
 - `API_HOST` — API 地址（默认 `https://bdapp.qdama.cn`）
 - `API_ID` — API 接口 ID
