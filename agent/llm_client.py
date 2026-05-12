@@ -47,7 +47,11 @@ def chat(system_prompt: str, user_message: str, temperature: float = 0.7) -> str
         system=system_prompt,
         messages=[{"role": "user", "content": user_message}],
     )
-    return resp.content[0].text
+    # DeepSeek V4 Pro returns ThinkingBlock + TextBlock — extract text
+    for block in resp.content:
+        if hasattr(block, "text"):
+            return block.text
+    raise RuntimeError("No text block in response")
 
 
 def chat_json(system_prompt: str, user_message: str, temperature: float = 0.3) -> dict:
