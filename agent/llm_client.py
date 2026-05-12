@@ -5,6 +5,15 @@ Uses the same ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL env vars as Claude Code CLI
 import os
 import json
 import re
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load .env from project root (works even under cron's minimal environment)
+_ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+if _ENV_PATH.exists():
+    load_dotenv(_ENV_PATH)
+
 from anthropic import Anthropic
 
 
@@ -14,18 +23,25 @@ _client = None
 def _get_client() -> Anthropic:
     global _client
     if _client is None:
+        api_key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
+        if not api_key:
+            raise RuntimeError("Missing ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN in environment")
         _client = Anthropic(
-            api_key=os.environ["ANTHROPIC_API_KEY"],
+            api_key=api_key,
             base_url=os.environ.get("ANTHROPIC_BASE_URL"),
         )
     return _client
+
+
+def _model_name() -> str:
+    return os.environ.get("ANTHROPIC_DEFAULT_SONNET_MODEL", "deepseek-v4-pro")
 
 
 def chat(system_prompt: str, user_message: str, temperature: float = 0.7) -> str:
     """Send a chat completion and return the text response."""
     client = _get_client()
     resp = client.messages.create(
-        model="claude-sonnet-4-6",
+        model=_model_name(),
         max_tokens=4096,
         temperature=temperature,
         system=system_prompt,
