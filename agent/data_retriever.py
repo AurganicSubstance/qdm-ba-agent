@@ -55,6 +55,7 @@ SQL RULES:
 4. ORDER BY date/group appropriately
 5. Round decimal results to 2-4 places
 6. Do NOT use LIMIT unless question asks for "top N"
+7. CRITICAL — Quoting rule: Chinese field names (e.g. 销售额) MUST be backtick-quoted. English field names (e.g. articleName) must NOT be quoted. Follow the templates exactly.
 
 Question: {question['question']}
 Hint tables: {question.get('tables_hint', '')}
