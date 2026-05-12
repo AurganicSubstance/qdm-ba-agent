@@ -19,49 +19,48 @@ import re
 
 def _build_sql(question: dict) -> str:
     """Use LLM to build a SQL query for the given question."""
-    prompt = f"""You are a SQL expert for a fresh-food supermarket database. Write a SINGLE SQL query for this data retrieval question.
+    prompt = f"""You are a SQL expert for a fresh-food supermarket (翠花 brand). Write a SINGLE SQL query.
 
-Database tables available:
+DEFAULT TABLE — 大妈运营宽表 (default_catalog.ads_business_analysis.operation_center_wide_daily):
+This is the PRIMARY table. One row = one aggregation level × one day. ALL Chinese field names.
 
-TABLE strategy_fm_levels_result (full path: default_catalog.ads_business_analysis.strategy_fm_levels_result):
-- Store-level (level_description='门店'): business_date, store_no, store_name, store_flag,
-  total_sale_amount, total_customer_count, total_per_customer_transaction,
-  full_link_profit_amount, full_link_profit_rate, store_profit_amount, store_profit_rate,
-  store_pricing_profit_rate, store_expected_profit_rate,
-  supply_chain_profit_rate, supply_chain_expected_profit_rate,
-  loss_amount, loss_rate, loss_rate_qty,
-  discount_rate, promotional_discount_rate, time_period_discount_rate,
-  inbound_amount, inbound_price, purchase_price,
-  average_selling_price, average_sales_original_price,
-  soldout_rate_16, soldout_rate_20, turnover_rate,
-  operating_store_days, operating_store_count
-- SKU-level (level_description='sku'): same fields + sku_id, category_name, category_level1/2/3_description
-- Sub-category (level_description='小分类'): grouped by category_level3_description
-- Mid-category (level_description='中分类'): grouped by category_level2_description
-- Large-category (level_description='大分类'): grouped by category_level1_description
-- ALWAYS include: WHERE day_clear = '1'
-- For store-level traffic/ticket: MUST use level_description='门店' (otherwise customer_count is NOT deduplicated!)
-- Date range: data available from 2025-09-15 to 2026-05-10
-- Only one store: store_no = 'food mart' (广州滨江宏岸店)
+DIMENSION FIELDS:
+- 日期 (timestamp millis) — filter with: FROM_UNIXTIME(日期/1000, 'yyyy-MM-dd') >= '2025-09-15'
+- 品类分层 — data level: '门店'(store daily, customer_count IS deduped), '大分类','中分类','小分类','sku'
+- 品类名称 — category name at current level
+- 门店汇总 — region or store name, e.g. '广州滨江宏岸店'
+- 门店汇总维度 — aggregation type: '管理区域','大区','门店'
 
-TABLE store_transaction_details (full path: default_catalog.ads_business_analysis.store_transaction_details):
+SALES METRICS: 销售额, 销售重量, 全天来客数, 客单价, 平均售价, 原价, 在售sku
+PRE-7PM METRICS: 19点前销售额, 19点前来客数, 19点前客单价, 19点前pi
+PROFIT METRICS: 全链路毛利额, 全链路毛利率, 门店毛利额, 门店毛利率, 供应链毛利额, 供应链毛利率, 供应链预期毛利率, 门店定价毛利率
+INVENTORY METRICS: 进货金额, 进货重量, 门店进货价, 采购价
+LOSS METRICS: 门店损耗额, 门店损耗率
+DISCOUNT METRICS: 促销折扣额, 促销折扣率, 时段折扣额, 时段折扣率
+OTHER: 营业店日数, 营业门店数
+
+IMPORTANT for operation_center_wide_daily:
+- Percentages are STRINGS like '19.77%'. To calculate: CAST(REPLACE(门店损耗率,'%','') AS DOUBLE)/100
+- Store-level: WHERE 门店汇总维度='门店' AND 品类分层='门店'
+- Category: WHERE 品类分层='中分类' AND 品类名称='蔬菜类'
+- Date: WHERE FROM_UNIXTIME(日期/1000, 'yyyy-MM-dd') >= '2025-09-15'
+- Region: WHERE 门店汇总维度='管理区域' AND 门店汇总='华南区'
+- There are MULTIPLE stores (not just one). Use 门店汇总 to filter by store name.
+
+USER-LEVEL TABLE — store_transaction_details (default_catalog.ads_business_analysis.store_transaction_details):
 - order_id, pay_at (datetime), sales_amt, channel (线上/线下),
   thirdparty_user_identity (user ID), customer_phone,
-  abi_article_id, article_name,
-  category_level1/2/3_description
-- One row per product per order (order_id can repeat)
-- For user counting: COUNT(DISTINCT thirdparty_user_identity)
-- For order counting: COUNT(DISTINCT order_id)
+  abi_article_id, article_name, category_level1/2/3_description
+- For user/repurchase analysis: COUNT(DISTINCT thirdparty_user_identity), COUNT(DISTINCT order_id)
 
-SQL rules:
-1. Return a clean SELECT query, NO markdown fences, NO explanations
-2. Always include WHERE conditions for date range
-3. Use level_description='门店' for store-level aggregates
-4. Use DATE_FORMAT for month grouping, DATE() for day grouping
+SQL RULES:
+1. Return ONLY the SQL query, no markdown, no backticks, no explanations
+2. Default to operation_center_wide_daily unless the question is about users/orders
+3. For store-level: 品类分层='门店' AND 门店汇总维度='门店'
+4. Date filtering: FROM_UNIXTIME(日期/1000, 'yyyy-MM-dd')
 5. ORDER BY date/group appropriately
 6. Round decimal results to 2-4 places
-7. Do NOT use LIMIT unless the question specifically asks for "top N"
-8. Only output the SQL, nothing else
+7. Do NOT use LIMIT unless question asks for "top N"
 
 Question: {question['question']}
 Hint tables: {question.get('tables_hint', '')}
