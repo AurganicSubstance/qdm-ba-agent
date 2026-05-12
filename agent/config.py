@@ -40,7 +40,7 @@ USER_EMAIL = "liangsheng1@qdama.cn"
 USER_NAME = "梁晟"
 
 # ── Number of questions per day ──
-QUESTIONS_PER_DAY = 10
+QUESTIONS_PER_DAY = 5
 
 # ── Max rows per query result in email ──
 MAX_RESULT_ROWS = 500

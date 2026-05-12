@@ -47,12 +47,12 @@ python -m agent.tools.manage_state --append "daily_runs.2026-05-12.sent" '{"id":
 
 ## Phase 1: MORNING (triggered at 16:30 China time)
 
-### Step 1: Generate 10 data retrieval questions
+### Step 1: Generate 5 data retrieval questions
 
 1. Scan the KnowledgeBase at `../BAKnowledgeBase3.1/2026年/` for `.md` files. Skip `会议纪要类` directories. Read 5 documents.
 2. Read each document's front matter (YAML between `---`) and first ~100 lines of body. Extract metrics, tags, title.
 3. Read `references/data_dictionary.md` and `references/sql_templates.md` for table/field knowledge.
-4. Using your knowledge of the database schema (below), generate 10 diverse, low-complexity data retrieval questions, each answerable with a SINGLE SQL query:
+4. Using your knowledge of the database schema (below), generate 5 diverse, low-complexity data retrieval questions, each answerable with a SINGLE SQL query:
    - **Must cover all 4 domains**: 商品 (product), 运营 (operations), 物流 (logistics), 用户 (user)
    - **Vary time ranges**: week, month, multi-month, Q1, YoY comparison
    - **Vary aggregation**: daily trend, top N ranking, summary stats, ratio/comparison
@@ -82,7 +82,7 @@ Each question object: `{"question_id": "<YYYYMMDD>_<NN>", "question": "...", "do
 
 ### Step 2: Execute data retrieval
 
-For each question (i=1..10):
+For each question (i=1..5):
 1. Re-read `references/data_dictionary.md` and `references/sql_templates.md` for context.
 2. Write a SINGLE SQL query following ALL SQL Conventions (see below).
 3. Execute:
