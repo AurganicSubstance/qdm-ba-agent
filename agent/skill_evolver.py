@@ -1,7 +1,7 @@
 """
 Skill Evolver.
 When an expert gives clear feedback about what's wrong and how to fix it,
-this module updates the data-query skill files to incorporate the fix.
+this module updates the dataqueryplus skill files to incorporate the fix.
 """
 import os
 import json
@@ -12,7 +12,7 @@ from pathlib import Path
 from agent.config import PROJECT_ROOT, EVOLUTION_LOG
 from agent.llm_client import chat_json as llm_chat_json
 
-SKILL_DIR = PROJECT_ROOT / "skills" / "data-query"
+SKILL_DIR = PROJECT_ROOT / ".claude" / "skills" / "dataqueryplus"
 SKILL_MD = SKILL_DIR / "SKILL.md"
 SQL_TEMPLATES = SKILL_DIR / "references" / "sql_templates.md"
 DATA_DICT = SKILL_DIR / "references" / "data_dictionary.md"
