@@ -1,6 +1,10 @@
 """
 Question Generator Agent.
-Reads KnowledgeBase docs → uses LLM to generate low-complexity data retrieval questions.
+Reads KnowledgeBase docs → reads dataqueryplus skill → uses LLM to generate
+low-complexity data retrieval questions.
+
+The skill is the SINGLE SOURCE OF TRUTH for table schemas.
+No table schemas are hardcoded here — all knowledge comes from the skill files.
 """
 import random
 import json
@@ -10,8 +14,20 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional
 
-from agent.config import KB_2026_PATH, KB_2025_PATH, QUESTIONS_PER_DAY
+from agent.config import KB_2026_PATH, KB_2025_PATH, QUESTIONS_PER_DAY, PROJECT_ROOT
 from agent.llm_client import chat as llm_chat
+
+SKILL_DIR = PROJECT_ROOT / ".claude" / "skills" / "dataqueryplus"
+
+
+def _read_skill_context() -> str:
+    """Read the current skill files as context for question generation."""
+    parts = []
+    for name in ["SKILL.md", "references/data_dictionary.md", "references/sql_templates.md"]:
+        path = SKILL_DIR / name
+        if path.exists():
+            parts.append(path.read_text(encoding="utf-8"))
+    return "\n\n".join(parts)
 
 
 def _find_md_files(base_path: str, limit: int = 5) -> list[dict]:
@@ -180,25 +196,16 @@ Body excerpt:
 {doc['body_sample'][:800]}
 """
 
+    skill_context = _read_skill_context()
+
     prompt = f"""You are a data retrieval specialist for a fresh-food supermarket (翠花 brand). Write questions for the 大妈 database.
 
-PRIMARY TABLE: `default_catalog.ads_business_analysis.operation_center_wide_daily` (运营宽表)
-- ALL Chinese field names. One row = one aggregation level × one day.
-- Dimension: 日期(timestamp ms), 品类分层(门店/大分类/中分类/小分类/sku), 品类名称, 门店汇总(store/region), 门店汇总维度(管理区域/大区/门店)
-- Sales: 销售额, 销售重量, 全天来客数, 客单价, 平均售价
-- Profit: 全链路毛利额, 全链路毛利率, 门店毛利额, 门店毛利率, 供应链毛利率, 供应链预期毛利率, 门店定价毛利率
-- Loss: 门店损耗额, 门店损耗率
-- Discount: 促销折扣额, 促销折扣率, 时段折扣额, 时段折扣率
-- Inventory: 进货金额, 门店进货价, 采购价
-- Store-level: WHERE 门店汇总维度='门店' AND 品类分层='门店'
-- Category: WHERE 品类分层='中分类' AND 品类名称='蔬菜类'
-- Percentages are STRINGS '19.77%' — need CAST/REPLACE for computation
-- Date: FROM_UNIXTIME(日期/1000, 'yyyy-MM-dd') >= '2025-09-15'
-- Multiple stores exist — filter with 门店汇总='xxx店'
+Below is the COMPLETE DATAQUERYPLUS SKILL — the single source of truth for all table schemas,
+field names, SQL patterns, and conventions. Use ONLY the tables and fields documented here:
 
-SECONDARY TABLE: `default_catalog.ads_business_analysis.store_transaction_details`
-- order_id, pay_at, sales_amt, channel, thirdparty_user_identity, customer_phone, article_name, category_level1/2/3_description
-- For user/member/repurchase analysis only
+---
+{skill_context}
+---
 
 Below are excerpts from the company's business analysis knowledge base. Study the metrics, categories, and analysis patterns used:
 

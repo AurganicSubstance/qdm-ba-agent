@@ -1,14 +1,20 @@
 """
 Data Retriever Agent.
-Takes a question → builds SQL via LLM → executes via db_connector → returns table + SQL.
+Takes a question → reads the dataqueryplus skill → builds SQL via LLM →
+executes via db_connector → returns table + SQL.
+
+The skill is the SINGLE SOURCE OF TRUTH for table schemas and SQL patterns.
+No table schemas are hardcoded here — all knowledge comes from the skill files.
 """
 import sys
 import os
+from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 
 from dotenv import load_dotenv
-load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
+load_dotenv(ROOT / ".env")
 
 from src.tools.db_connector import create_connector_from_config, DBConnectorError
 from agent.config import MAX_RESULT_ROWS
@@ -16,51 +22,39 @@ from agent.llm_client import chat as llm_chat
 import json
 import re
 
+SKILL_DIR = ROOT / ".claude" / "skills" / "dataqueryplus"
+
+
+def _read_skill_context() -> str:
+    """Read the current skill files as context for SQL generation."""
+    parts = []
+    for name in ["SKILL.md", "references/data_dictionary.md", "references/sql_templates.md"]:
+        path = SKILL_DIR / name
+        if path.exists():
+            parts.append(path.read_text(encoding="utf-8"))
+    return "\n\n".join(parts)
+
 
 def _build_sql(question: dict) -> str:
-    """Use LLM to build a SQL query for the given question."""
-    prompt = f"""You are a SQL expert for a fresh-food supermarket (翠花 brand). Write a SINGLE SQL query.
+    """Use LLM to build a SQL query. Skill files provide all table/schema knowledge."""
+    skill_context = _read_skill_context()
 
-DEFAULT TABLE — 大妈运营宽表 (default_catalog.ads_business_analysis.operation_center_wide_daily):
-This is the PRIMARY table. One row = one aggregation level × one day. ALL Chinese field names.
+    prompt = f"""You are a SQL expert. Write a SINGLE SQL query for this data retrieval question.
 
-DIMENSION FIELDS:
-- 日期 (timestamp millis) — filter with: FROM_UNIXTIME(日期/1000, 'yyyy-MM-dd') >= '2025-09-15'
-- 品类分层 — data level: '门店'(store daily, customer_count IS deduped), '大分类','中分类','小分类','sku'
-- 品类名称 — category name at current level
-- 门店汇总 — region or store name, e.g. '广州滨江宏岸店'
-- 门店汇总维度 — aggregation type: '管理区域','大区','门店'
+Below is the COMPLETE DATAQUERYPLUS SKILL — the single source of truth for all table schemas,
+field names, SQL patterns, and rules. Use ONLY the tables and fields documented here:
 
-SALES METRICS: 销售额, 销售重量, 全天来客数, 客单价, 平均售价, 原价, 在售sku
-PRE-7PM METRICS: 19点前销售额, 19点前来客数, 19点前客单价, 19点前pi
-PROFIT METRICS: 全链路毛利额, 全链路毛利率, 门店毛利额, 门店毛利率, 供应链毛利额, 供应链毛利率, 供应链预期毛利率, 门店定价毛利率
-INVENTORY METRICS: 进货金额, 进货重量, 门店进货价, 采购价
-LOSS METRICS: 门店损耗额, 门店损耗率
-DISCOUNT METRICS: 促销折扣额, 促销折扣率, 时段折扣额, 时段折扣率
-OTHER: 营业店日数, 营业门店数
-
-IMPORTANT for operation_center_wide_daily:
-- Percentages are STRINGS like '19.77%'. To calculate: CAST(REPLACE(门店损耗率,'%','') AS DOUBLE)/100
-- Store-level: WHERE 门店汇总维度='门店' AND 品类分层='门店'
-- Category: WHERE 品类分层='中分类' AND 品类名称='蔬菜类'
-- Date: WHERE FROM_UNIXTIME(日期/1000, 'yyyy-MM-dd') >= '2025-09-15'
-- Region: WHERE 门店汇总维度='管理区域' AND 门店汇总='华南区'
-- There are MULTIPLE stores (not just one). Use 门店汇总 to filter by store name.
-
-USER-LEVEL TABLE — store_transaction_details (default_catalog.ads_business_analysis.store_transaction_details):
-- order_id, pay_at (datetime), sales_amt, channel (线上/线下),
-  thirdparty_user_identity (user ID), customer_phone,
-  abi_article_id, article_name, category_level1/2/3_description
-- For user/repurchase analysis: COUNT(DISTINCT thirdparty_user_identity), COUNT(DISTINCT order_id)
+---
+{skill_context}
+---
 
 SQL RULES:
 1. Return ONLY the SQL query, no markdown, no backticks, no explanations
-2. Default to operation_center_wide_daily unless the question is about users/orders
-3. For store-level: 品类分层='门店' AND 门店汇总维度='门店'
-4. Date filtering: FROM_UNIXTIME(日期/1000, 'yyyy-MM-dd')
-5. ORDER BY date/group appropriately
-6. Round decimal results to 2-4 places
-7. Do NOT use LIMIT unless question asks for "top N"
+2. Default to the 大妈 (Dama) operation_center_wide_daily table unless the question is about users/orders
+3. Follow ALL conventions from the skill (timestamp dates, Chinese field names, percentage handling, etc.)
+4. ORDER BY date/group appropriately
+5. Round decimal results to 2-4 places
+6. Do NOT use LIMIT unless question asks for "top N"
 
 Question: {question['question']}
 Hint tables: {question.get('tables_hint', '')}
