@@ -26,17 +26,21 @@ echo "=== STEP 2: Executing queries ==="
 for i in 0 1 2 3 4; do
   echo "--- Question $((i+1))/5 ---"
   if claude -p "$(cat <<PROMPT
-Execute ONE question. Read .claude/skills/dataqueryplus/references/data_dictionary.md first.
-Then read the question at index $i: python -m agent.tools.manage_state --get "daily_runs.${TODAY}.sent[${i}]"
-Write ONE SQL. Follow rules exactly:
-- Chinese fields: backtick quotes. English fields: no quotes.
-- Full table path: default_catalog.ads_business_analysis.<table>
-- 品类分层='门店' for store-level. from_unixtime(日期/1000) for dates.
-- Only SELECT *, no column references on SKU/SPU tables.
-Run: python -m agent.tools.db_query "SQL"
-If error, fix and retry ONCE.
-Save result: python -m agent.tools.manage_state --merge "daily_runs.${TODAY}.sent[${i}]" '{"sql":"...","status":"success|error","columns":[...],"row_count":N}'
-Report: success or fail. Nothing else.
+Read question: python -m agent.tools.manage_state --get "daily_runs.${TODAY}.sent[${i}]"
+Read schema: Read .claude/skills/dataqueryplus/references/data_dictionary.md
+
+Write SQL with these rules:
+- Chinese fields: backtick \`quotes\`. English fields: NO quotes.
+- Table: default_catalog.ads_business_analysis.<table>
+- \`品类分层\`='门店' for store-level. from_unixtime(\`日期\`/1000) for dates.
+- SKU/SPU tables: SELECT * only.
+
+Execute: python -m agent.tools.db_query "SQL"
+If error: fix SQL, run again.
+Save: python -m agent.tools.manage_state --merge "daily_runs.${TODAY}.sent[${i}]" '{"sql":"...","status":"ok|error","columns":[...],"row_count":N}'
+
+CRITICAL: Execute commands directly. Do NOT ask for permission. Do NOT explain first.
+Output after done: {"status":"ok|error","rows":N}
 PROMPT
 )" --print --verbose; then
     echo "Q$i OK"
@@ -49,32 +53,31 @@ echo "=== STEP 2 DONE ==="
 # ── Step 3: Send verification emails ──
 echo "=== STEP 3: Sending emails ==="
 claude -p "$(cat <<PROMPT
-Send verification emails for today's questions. No questions, no planning — just send.
+Read results: python -m agent.tools.manage_state --get "daily_runs.${TODAY}.sent"
+Group by expert_email field. Max 3 per email.
 
-Step A: python -m agent.tools.manage_state --get "daily_runs.${TODAY}.sent"
-Step B: Group results by expert_email. Max 3 per email.
-Step C: For each group, write HTML to /tmp/email_body_N.html following the template below, then send:
-python -m agent.tools.send_email --to "expert@email" --subject "【取数验证】${TODAY_MMDD} 取数验证 - Name" --body-file /tmp/email_body_N.html --sender-name "取数验证Agent"
-
-HTML template (use exactly):
+For each group:
+1. Write HTML body to /tmp/email_body_N.html:
 <h2>取数验证 — ${TODAY_MMDD}</h2>
 <p><b>NAME</b> 您好，以下是今日的自动取数结果。请验证数据是否正确：</p>
 <blockquote style='background:#f5f5f5;padding:10px;'><b>验证方式</b>：正确请回复<b>"正确"</b>；不对请回复<b>"不对"</b>并说明正确口径和字段。</blockquote>
 <!-- per question: -->
 <div style='margin:20px 0;padding:15px;border:1px solid #ddd;'>
 <h3>问题 N (DOMAIN)</h3>
-<p><b>问题</b>: QUESTION</p>
-<p><b>表</b>: TABLE</p>
-<pre style='background:#2d2d2d;color:#f8f8f2;padding:10px;'>SQL</pre>
-<p><b>结果</b> (N rows):</p>
+<p><b>问题</b>: QUESTION_TEXT</p>
+<p><b>表</b>: TABLE_HINT</p>
+<pre style='background:#2d2d2d;color:#f8f8f2;padding:10px;'>SQL_TEXT</pre>
+<p><b>结果</b> (ROW_COUNT rows):</p>
 <table border='1' cellpadding='4' cellspacing='0' style='border-collapse:collapse;'>
-<tr style='background:#f0f0f0;'>HEADER</tr>
-<!-- first 20 data rows -->
+<tr style='background:#f0f0f0;'>COLUMN_HEADERS</tr>
 </table>
 </div>
 <p style='color:#666;font-size:11px;'>此邮件由取数验证Agent自动发送。请直接回复本邮件。</p>
 
-After all emails sent, output: "SENT: N emails to [experts]". No further tool calls.
+2. Send: python -m agent.tools.send_email --to "EXPERT_EMAIL" --subject "【取数验证】${TODAY_MMDD} 取数验证 - EXPERT_NAME" --body-file /tmp/email_body_N.html --sender-name "取数验证Agent"
+
+CRITICAL: Execute commands directly. Do NOT ask for permission. Do NOT explain first.
+After all sent, output: {"sent":N,"to":["expert1","expert2"]}
 PROMPT
 )" --print --verbose
 echo "=== STEP 3 DONE ==="
