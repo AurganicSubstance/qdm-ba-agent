@@ -28,22 +28,26 @@ def _load():
 
 def _save(state: dict):
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
-    tmp = STATE_FILE + ".tmp"
+    tmp = str(STATE_FILE) + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
     os.replace(tmp, STATE_FILE)
 
 
 def _navigate(state, path: str):
-    """Navigate dot-notation path. Empty string returns root."""
+    """Navigate dot-notation path. Supports array[0] syntax. Empty string returns root."""
     if not path:
         return state
     parts = path.split(".")
     current = state
     for part in parts:
-        if isinstance(current, list):
-            idx = int(part)
-            current = current[idx]
+        bracket_idx = part.find("[")
+        if bracket_idx >= 0:
+            name = part[:bracket_idx]
+            idx = int(part[bracket_idx + 1 : -1])
+            current = current[name][idx]
+        elif isinstance(current, list):
+            current = current[int(part)]
         elif isinstance(current, dict):
             current = current[part]
         else:
