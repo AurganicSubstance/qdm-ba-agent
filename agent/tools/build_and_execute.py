@@ -38,17 +38,26 @@ def _read_skill_schema() -> str:
     return "\n\n".join(parts)
 
 
-def _call_claude(sql_prompt: str) -> str:
+def _call_claude(sql_prompt: str, timeout: int = 180) -> str:
     """Call Claude Code to generate SQL. Returns raw stdout."""
     env = os.environ.copy()
-    result = subprocess.run(
-        ["claude", "-p", sql_prompt, "--print"],
-        capture_output=True, text=True,
-        cwd=str(ROOT),
-        env=env,
-        timeout=120,
-    )
-    return result.stdout.strip()
+    try:
+        result = subprocess.run(
+            ["claude", "-p", sql_prompt, "--print"],
+            capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+            cwd=str(ROOT),
+            env=env,
+            timeout=timeout,
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.strip() if result.stderr else ""
+            raise RuntimeError(f"claude exited {result.returncode}: {stderr[:200]}")
+        return (result.stdout or "").strip()
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"claude subprocess timed out after {timeout}s")
+    except FileNotFoundError:
+        raise RuntimeError("claude CLI not found in PATH")
 
 
 def _extract_sql(text: str) -> str:
@@ -100,25 +109,50 @@ def _run_db(sql: str):
 
 def _build_sql_prompt(question: dict) -> str:
     schema = _read_skill_schema()
+    schema_short = schema[:1500]
+    tables_hint = question.get('tables_hint', '')
     return f"""You are a SQL expert. Generate ONE SQL query for this question.
 
 QUESTION: {question['question']}
-TABLE: {question.get('tables_hint', '')}
+TABLE: {tables_hint}
 FIELDS: {question.get('fields_hint', '')}
 
 SCHEMA REFERENCE:
-{schema[:3000]}
+{schema_short}
 
 CRITICAL RULES:
-- Chinese field names: backtick quotes (e.g. \\`销售额\\`)
-- English field names: NO quotes (e.g. articleName)
+- Chinese field names: backtick quotes, English fields: NO quotes
 - Full table path: default_catalog.ads_business_analysis.<table>
-- \\`品类分层\\`='门店' for store-level
-- from_unixtime(\\`日期\\`/1000) for date conversion
-- SKU/SPU tables: SELECT * only (column refs fail)
+- `品类分层`='门店' for store-level
+- from_unixtime(`日期`/1000) for date conversion
 - No LIMIT unless question asks for top N
 
 Output ONLY the SQL query in a ```sql code block. Nothing else."""
+
+
+def _generate_template_sql(question: dict) -> str:
+    """Template-generate SQL for SKU/SPU tables that only support SELECT * + ym=."""
+    import re as _re
+    q = question['question']
+    tables_hint = question.get('tables_hint', '')
+    table = tables_hint.split(',')[0].strip() if tables_hint else 'product_center_business_sku_v3_info_di'
+
+    # Extract YYYY-MM from question
+    m = _re.search(r'(\d{4})年(\d{1,2})月|(\d{4})-(\d{2})', q)
+    if m:
+        if m.group(1):
+            ym = f"{m.group(1)}-{int(m.group(2)):02d}"
+        else:
+            ym = f"{m.group(3)}-{m.group(4)}"
+    else:
+        from datetime import datetime
+        ym = datetime.now().strftime('%Y-%m')
+
+    return f"SELECT * FROM default_catalog.ads_business_analysis.{table} WHERE ym='{ym}' LIMIT 20"
+
+
+def _is_sku_table(tables_hint: str) -> bool:
+    return any(t in tables_hint for t in ['sku', 'spu'])
 
 
 def main():
@@ -143,15 +177,22 @@ def main():
         print(json.dumps({"error": f"Question not found: {today}[{idx}]"}, ensure_ascii=False))
         sys.exit(1)
 
-    # ── Generate SQL via Claude Code ──
-    prompt = _build_sql_prompt(question)
-    cc_output = _call_claude(prompt)
-
-    # Extract SQL from CC output
-    sql = _extract_sql(cc_output)
-    if not sql or not _looks_like_sql(sql):
-        print(json.dumps({"error": "Failed to extract SQL from Claude Code output", "cc_output": cc_output[:500]}, ensure_ascii=False))
-        sys.exit(1)
+    # ── Generate SQL (template for SKU tables, Claude Code for others) ──
+    tables_hint = question.get('tables_hint', '')
+    if _is_sku_table(tables_hint):
+        sql = _generate_template_sql(question)
+        print(f"[INFO] SKU table detected, using template SQL (no CC call)", file=sys.stderr)
+    else:
+        prompt = _build_sql_prompt(question)
+        try:
+            cc_output = _call_claude(prompt)
+        except RuntimeError as e:
+            print(json.dumps({"error": f"Claude Code call failed: {e}"}, ensure_ascii=False))
+            sys.exit(1)
+        sql = _extract_sql(cc_output)
+        if not sql or not _looks_like_sql(sql):
+            print(json.dumps({"error": "Failed to extract SQL from Claude Code output", "cc_output": cc_output[:500]}, ensure_ascii=False))
+            sys.exit(1)
 
     # ── Execute SQL ──
     try:
@@ -166,30 +207,41 @@ def main():
     # ── Retry once on error ──
     if data is None:
         print(f"[WARN] First attempt failed: {error_msg}, retrying...", file=sys.stderr)
-        retry_prompt = f"""The following SQL failed with error: {error_msg}
+        is_sku = _is_sku_table(question.get('tables_hint', ''))
+        col_error = 'cannot be resolved' in error_msg
 
-Failed SQL:
-{sql}
+        if is_sku and col_error:
+            # SKU tables only support SELECT * + ym= — CC can't fix column refs
+            print("[WARN] SKU column error is unfixable, skipping retry", file=sys.stderr)
+        else:
+            retry_prompt = f"""Fix this SQL error.
 
+Error: {error_msg}
+Failed SQL: {sql}
 Question: {question['question']}
 Table: {question.get('tables_hint', '')}
 
-Schema:
-{_read_skill_schema()[:3000]}
+Rules:
+- Chinese fields: backtick quotes, English fields: NO quotes
+- Full path: default_catalog.ads_business_analysis.<table>
+- `品类分层`='门店' for store-level queries
 
-Fix the error and output ONLY the corrected SQL in a ```sql block. Nothing else."""
-        cc_output2 = _call_claude(retry_prompt)
-        sql2 = _extract_sql(cc_output2)
-        if sql2 and _looks_like_sql(sql2):
-            sql = sql2
+Output ONLY the corrected SQL in ```sql block."""
             try:
-                data = _run_db(sql)
-            except DBConnectorError as e:
-                data = None
-                error_msg = str(e)
-            except Exception as e:
-                data = None
-                error_msg = f"Unexpected: {e}"
+                cc_output2 = _call_claude(retry_prompt, timeout=120)
+                sql2 = _extract_sql(cc_output2)
+                if sql2 and _looks_like_sql(sql2):
+                    sql = sql2
+                    try:
+                        data = _run_db(sql)
+                    except DBConnectorError as e:
+                        data = None
+                        error_msg = str(e)
+                    except Exception as e:
+                        data = None
+                        error_msg = f"Unexpected: {e}"
+            except RuntimeError as e:
+                print(f"[WARN] Retry call failed: {e}", file=sys.stderr)
 
     # ── Format result ──
     if data is not None:
