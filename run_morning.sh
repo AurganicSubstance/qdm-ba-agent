@@ -15,23 +15,9 @@ export ANTHROPIC_BASE_URL="${ANTHROPIC_BASE_URL:-https://api.deepseek.com/anthro
 export ANTHROPIC_API_KEY="${ANTHROPIC_AUTH_TOKEN:-$ANTHROPIC_API_KEY}"
 export ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL:-deepseek-v4-pro}"
 
-# ── Step 1: Generate 5 questions ──
+# ── Step 1: Generate 5 questions (direct DeepSeek, no Claude Code) ──
 echo "=== STEP 1: Generating questions ==="
-claude -p "$(cat <<'PROMPT'
-Task: Generate 5 data questions. Do nothing else.
-
-1. Read 5 .md files from ../BAKnowledgeBase3.1/2026年/ (skip 会议纪要类 dirs).
-2. Read .claude/skills/dataqueryplus/references/data_dictionary.md for table/field names.
-3. Generate 5 questions covering 4 domains: 商品/运营/物流/用户.
-4. Each question: {question_id, question, domain, tables_hint, fields_hint, expert_name, expert_email}
-   Expert routing: 商品→刘阗/liutian1, 运营→刘舒颖/liushuying1, 物流→周晶晶/zhoujingjing, 用户→刘舒颖/liushuying1
-5. Save to state then exit:
-   python -m agent.tools.manage_state --set "daily_runs.DATE" '{"sent":[],"replied":[],"correct":[],"incorrect":[],"evolved":[]}'
-   python -m agent.tools.manage_state --append "daily_runs.DATE.sent" 'QUESTION_JSON'
-   (repeat append for all 5, replace DATE with today YYYY-MM-DD)
-6. Output the 5 question IDs and exit. No email. No SQL execution.
-PROMPT
-)" --print --verbose
+python -m agent.tools.generate_questions
 echo "=== STEP 1 DONE ==="
 
 # ── Step 2: Execute each question (5 separate CC calls) ──

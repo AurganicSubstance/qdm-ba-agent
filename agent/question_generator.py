@@ -198,7 +198,7 @@ Body excerpt:
 
     skill_context = _read_skill_context()
 
-    prompt = f"""You are a data retrieval specialist for a fresh-food supermarket (翠花 brand). Write questions for the 大妈 database.
+    prompt = f"""You are a data retrieval specialist for a fresh-food supermarket (钱大妈 brand). Write questions for the 大妈 database.
 
 Below is the COMPLETE DATAQUERYPLUS SKILL — the single source of truth for all table schemas,
 field names, SQL patterns, and conventions. Use ONLY the tables and fields documented here:
@@ -214,7 +214,7 @@ Below are excerpts from the company's business analysis knowledge base. Study th
 Generate {QUESTIONS_PER_DAY} NEW data retrieval questions. Rules:
 1. Questions MUST be simple data retrieval (NOT analysis)
 2. Default to operation_center_wide_daily for store/sales/profit/loss/discount/category questions
-3. Use store_transaction_details ONLY for user/member/order-level questions
+3. Use product_center_business_sku_v3_info_di for product/SKU details
 4. Vary the domains: mix of 商品(product), 运营(operations), 物流(supply chain), 用户(user/member)
 5. Vary time ranges: some week, some month, some multi-month
 6. Questions should be answerable with a single SQL query
@@ -265,9 +265,9 @@ def _generate_fallback_questions(today: str) -> list[dict]:
             "expected_output_type": "category breakdown",
         },
         {
-            "question": "2026年1-3月每月会员人均购买频次？",
-            "tables_hint": "store_transaction_details",
-            "fields_hint": "thirdparty_user_identity, order_id, COUNT DISTINCT",
+            "question": "2026年1-3月每月会员复购率变化？",
+            "tables_hint": "product_center_business_sku_v3_info_di",
+            "fields_hint": "buyMemberNum, buyAgainMemberNum, repurchaseRate, ym",
             "expected_output_type": "monthly time series",
         },
         {
@@ -307,10 +307,10 @@ def _generate_fallback_questions(today: str) -> list[dict]:
             "expected_output_type": "monthly trend",
         },
         {
-            "question": "2026年4月线上和线下渠道的订单数占比和客单价对比？",
-            "tables_hint": "store_transaction_details",
-            "fields_hint": "channel, order_id, sales_amt",
-            "expected_output_type": "channel breakdown",
+            "question": "2026年4月门店客单价和来客数每日趋势？",
+            "tables_hint": "operation_center_wide_daily",
+            "fields_hint": "客单价, 全天来客数, 日期, 品类分层='门店'",
+            "expected_output_type": "daily trend",
         },
     ]
     for i, q in enumerate(templates):
