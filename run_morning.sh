@@ -1,7 +1,14 @@
 #!/bin/bash
 # Morning Phase — Claude Code Data Retrieval Agent
 # Cron: 30 16 * * * cd /root/qdm-ba-agent && bash run_morning.sh >> logs/morning.log 2>&1
+# Test mode: bash run_morning.sh --test (skips email sending)
 set -e
+
+TEST_MODE=false
+if [ "${1:-}" = "--test" ]; then
+  TEST_MODE=true
+  echo "=== TEST MODE — emails will NOT be sent ==="
+fi
 
 cd "$(dirname "$0")"
 TODAY=$(date '+%Y-%m-%d')
@@ -34,8 +41,12 @@ done
 echo "=== STEP 2 DONE ==="
 
 # ── Step 3: Send verification emails (pure Python) ──
-echo "=== STEP 3: Sending emails ==="
-python -m agent.tools.send_verification_emails
-echo "=== STEP 3 DONE ==="
+if $TEST_MODE; then
+  echo "=== STEP 3: SKIPPED (test mode) ==="
+else
+  echo "=== STEP 3: Sending emails ==="
+  python -m agent.tools.send_verification_emails
+  echo "=== STEP 3 DONE ==="
+fi
 
 echo "=== MORNING PHASE END $TODAY $(date '+%H:%M:%S') ==="
