@@ -31,7 +31,7 @@ Task: Generate 5 data questions. Do nothing else.
    (repeat append for all 5, replace DATE with today YYYY-MM-DD)
 6. Output the 5 question IDs and exit. No email. No SQL execution.
 PROMPT
-)" --dangerously-skip-permissions --print --verbose
+)" --print --verbose
 echo "=== STEP 1 DONE ==="
 
 # ── Step 2: Execute each question (5 separate CC calls) ──
@@ -51,7 +51,7 @@ If error, fix and retry ONCE.
 Save result: python -m agent.tools.manage_state --merge "daily_runs.${TODAY}.sent[${i}]" '{"sql":"...","status":"success|error","columns":[...],"row_count":N}'
 Report: success or fail. Nothing else.
 PROMPT
-)" --dangerously-skip-permissions --print --verbose; then
+)" --print --verbose; then
     echo "Q$i OK"
   else
     echo "Q$i FAILED"
@@ -70,7 +70,7 @@ Task: Send verification emails. Do nothing else.
 4. Send via: python -m agent.tools.send_email --to "EMAIL" --subject "【取数验证】DATE 数据取数验证 - NAME" --body-file /tmp/email_body_N.html --sender-name "取数验证Agent"
 5. Report: how many emails sent to whom. Exit.
 PROMPT
-)" --dangerously-skip-permissions --print --verbose
+)" --print --verbose
 echo "=== STEP 3 DONE ==="
 
 echo "=== MORNING PHASE END $TODAY $(date '+%H:%M:%S') ==="

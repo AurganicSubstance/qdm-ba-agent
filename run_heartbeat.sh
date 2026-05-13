@@ -25,6 +25,6 @@ Step 2: Classify each as correct/incorrect/unclear. Send follow-up for unclear o
 Step 3: For actionable incorrect replies, evolve the right skill file. Only append, never delete.
 Step 4: Notify liangsheng1@qdama.cn ONLY if files changed. Otherwise exit silently.
 PROMPT
-)" --dangerously-skip-permissions --print --verbose
+)" --print --verbose
 
 echo "=== HEARTBEAT END $(date '+%Y-%m-%d %H:%M:%S') ==="
