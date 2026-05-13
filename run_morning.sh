@@ -37,8 +37,11 @@ Write SQL with these rules:
 
 Execute: python -m agent.tools.db_query "SQL"
 If error: fix SQL, run again.
-Save: python -m agent.tools.manage_state --merge "daily_runs.${TODAY}.sent[${i}]" '{"sql":"...","status":"ok|error","columns":[...],"row_count":N}'
 
+After db_query succeeds, save result via manage_state --merge with FULL data:
+python -m agent.tools.manage_state --merge "daily_runs.${TODAY}.sent[${i}]" '{"sql":"<the SQL>","status":"ok","columns":[...],"row_count":N,"rows":[...first 20 rows...]}'
+
+CRITICAL: The merge MUST include the "rows" array with actual data. Step 3 emails need it.
 CRITICAL: Execute commands directly. Do NOT ask for permission. Do NOT explain first.
 Output after done: {"status":"ok|error","rows":N}
 PROMPT
@@ -70,6 +73,7 @@ For each group:
 <p><b>结果</b> (ROW_COUNT rows):</p>
 <table border='1' cellpadding='4' cellspacing='0' style='border-collapse:collapse;'>
 <tr style='background:#f0f0f0;'>COLUMN_HEADERS</tr>
+DATA_ROWS
 </table>
 </div>
 <p style='color:#666;font-size:11px;'>此邮件由取数验证Agent自动发送。请直接回复本邮件。</p>
