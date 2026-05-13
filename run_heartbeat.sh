@@ -17,10 +17,14 @@ export ANTHROPIC_BASE_URL="${ANTHROPIC_BASE_URL:-https://api.deepseek.com/anthro
 export ANTHROPIC_API_KEY="${ANTHROPIC_AUTH_TOKEN:-$ANTHROPIC_API_KEY}"
 export ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL:-deepseek-v4-pro}"
 
-claude -p "Load the skill from .claude/skills/dataqueryplus/SKILL.md and execute the HEARTBEAT PHASE as described in it.
-Step 1: Check for expert replies via check_feedback.
-Step 2: Classify each reply as correct/incorrect/unclear. Send follow-ups for unclear ones.
-Step 3: For actionable incorrect replies, evolve the appropriate skill file (sql_templates.md, data_dictionary.md, or CLAUDE.md).
-Step 4: ONLY notify user if skill files were actually changed. Otherwise exit silently." --print 2>&1
+claude -p "$(cat <<'PROMPT'
+Load .claude/skills/dataqueryplus/SKILL.md and execute HEARTBEAT PHASE.
+
+Step 1: Check for expert replies via python -m agent.tools.check_feedback --hours 2.
+Step 2: Classify each as correct/incorrect/unclear. Send follow-up for unclear ones.
+Step 3: For actionable incorrect replies, evolve the right skill file. Only append, never delete.
+Step 4: Notify liangsheng1@qdama.cn ONLY if files changed. Otherwise exit silently.
+PROMPT
+)" --print --verbose
 
 echo "=== HEARTBEAT END $(date '+%Y-%m-%d %H:%M:%S') ==="

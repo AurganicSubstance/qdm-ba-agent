@@ -17,10 +17,15 @@ export ANTHROPIC_BASE_URL="${ANTHROPIC_BASE_URL:-https://api.deepseek.com/anthro
 export ANTHROPIC_API_KEY="${ANTHROPIC_AUTH_TOKEN:-$ANTHROPIC_API_KEY}"
 export ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL:-deepseek-v4-pro}"
 
-claude -p "Load the skill from .claude/skills/dataqueryplus/SKILL.md and execute the complete MORNING PHASE as described in it. Today is $TODAY.
-Step 1: Generate 5 questions from the KnowledgeBase and save to state.
-Step 2: Execute all 5 SQL queries (build SQL, run db_query, retry on error).
+claude -p "$(cat <<'PROMPT'
+Load .claude/skills/dataqueryplus/SKILL.md and execute MORNING PHASE.
+
+Step 1: Generate 5 questions from ../BAKnowledgeBase3.1/2026年/ covering 商品/运营/物流/用户. Save to state.
+Step 2: Execute each via python -m agent.tools.db_query. Retry once on error.
 Step 3: Send verification emails grouped by expert (max 3 per email).
-Follow ALL SQL Conventions exactly. Use the CLI tools for all database, email, and state operations." --print 2>&1
+
+Follow SQL Conventions in SKILL.md. Use CLI tools for all operations.
+PROMPT
+)" --print --verbose
 
 echo "=== MORNING PHASE END $TODAY $(date '+%H:%M:%S') ==="
