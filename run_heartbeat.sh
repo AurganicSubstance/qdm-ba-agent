@@ -17,7 +17,7 @@ export ANTHROPIC_BASE_URL="${ANTHROPIC_BASE_URL:-https://api.deepseek.com/anthro
 export ANTHROPIC_API_KEY="${ANTHROPIC_AUTH_TOKEN:-$ANTHROPIC_API_KEY}"
 export ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL:-deepseek-v4-pro}"
 
-claude --skill dataqueryplus -p "Execute the HEARTBEAT PHASE as described in SKILL.md.
+claude -p "Load the skill from .claude/skills/dataqueryplus/SKILL.md and execute the HEARTBEAT PHASE as described in it.
 Step 1: Check for expert replies via check_feedback.
 Step 2: Classify each reply as correct/incorrect/unclear. Send follow-ups for unclear ones.
 Step 3: For actionable incorrect replies, evolve the appropriate skill file (sql_templates.md, data_dictionary.md, or CLAUDE.md).

@@ -17,7 +17,7 @@ export ANTHROPIC_BASE_URL="${ANTHROPIC_BASE_URL:-https://api.deepseek.com/anthro
 export ANTHROPIC_API_KEY="${ANTHROPIC_AUTH_TOKEN:-$ANTHROPIC_API_KEY}"
 export ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL:-deepseek-v4-pro}"
 
-claude --skill dataqueryplus -p "Execute the complete MORNING PHASE as described in SKILL.md. Today is $TODAY.
+claude -p "Load the skill from .claude/skills/dataqueryplus/SKILL.md and execute the complete MORNING PHASE as described in it. Today is $TODAY.
 Step 1: Generate 5 questions from the KnowledgeBase and save to state.
 Step 2: Execute all 5 SQL queries (build SQL, run db_query, retry on error).
 Step 3: Send verification emails grouped by expert (max 3 per email).
