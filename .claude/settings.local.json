@@ -58,7 +58,10 @@
       "Bash(bash run_morning.sh)",
       "Bash(bash run_heartbeat.sh)",
       "Edit(.claude/skills/dataqueryplus/references/**)",
-      "Edit(CLAUDE.md)"
+      "Edit(CLAUDE.md)",
+      "Read(/root/BAKnowledgeBase3.1/**)",
+      "Read(/tmp/**)",
+      "Bash(cat /tmp/**)"
     ],
     "deny": [
       "Bash(rm -rf /*)",
@@ -86,7 +89,10 @@
       "Read(~/.aws/**)"
     ],
     "additionalDirectories": [
-      "c:\\Users\\tommy\\Documents\\Projects\\QDM BA Agent\\.claude\\skills"
+      "c:\\Users\\tommy\\Documents\\Projects\\QDM BA Agent\\.claude\\skills",
+      "/root/BAKnowledgeBase3.1",
+      "/root/qdm-ba-agent/data",
+      "/tmp"
     ]
   }
 }
