@@ -160,28 +160,30 @@ def collect_feedback(dry_run: bool = False) -> dict:
         # Match reply to original message
         matched_entry = None
 
-        # Strategy 1: match by Message-ID header (most reliable)
+        # Strategy 1: match by Message-ID header (most reliable, for post-fix emails)
         for msg_id, entry in message_id_map.items():
             if msg_id and msg_id.strip("<>") in in_reply_to:
                 matched_entry = entry
                 break
 
-        # Strategy 2: fallback — match by expert email (for pre-fix entries with null message_id)
-        if not matched_entry and from_addr:
-            for entry in pending:
-                if entry.get("expert_email") and entry["expert_email"].lower() in from_addr.lower():
-                    # Only match if this entry hasn't been matched yet
-                    if entry.get("reply_status") == "pending":
+        # Strategy 2: fallback — match reply to current batch by date + expert
+        # Verification email subjects: 【取数验证】05/14 数据取数验证 - ExpertName
+        # Expert replies contain: Re: 【取数验证】05/14 ... or 回复：【取数验证】05/14 ...
+        if not matched_entry:
+            batch_mmdd = today_key[5:]  # "2026-05-14" → "05-14"
+            batch_mmdd_slash = batch_mmdd.replace("-", "/")  # "05/14"
+            if ("取数验证" in subject and
+                (batch_mmdd in subject or batch_mmdd_slash in subject)):
+                # Reply belongs to this batch — narrow by expert email or name
+                for entry in pending:
+                    if entry.get("reply_status") != "pending":
+                        continue
+                    if entry.get("expert_email") and entry["expert_email"].lower() in from_addr.lower():
                         matched_entry = entry
                         break
-
-        # Strategy 3: fallback — match by expert name in subject
-        if not matched_entry:
-            for entry in pending:
-                name = entry.get("expert_name", "")
-                if name and name in subject and entry.get("reply_status") == "pending":
-                    matched_entry = entry
-                    break
+                    if entry.get("expert_name") and entry["expert_name"] in subject:
+                        matched_entry = entry
+                        break
 
         if not matched_entry:
             continue
