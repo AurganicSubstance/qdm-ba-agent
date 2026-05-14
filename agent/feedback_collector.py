@@ -154,12 +154,34 @@ def collect_feedback(dry_run: bool = False) -> dict:
 
     for email_data in emails:
         in_reply_to = email_data.get("in_reply_to", "")
+        from_addr = email_data.get("from_address", "")
+        subject = email_data.get("subject", "")
+
         # Match reply to original message
         matched_entry = None
+
+        # Strategy 1: match by Message-ID header (most reliable)
         for msg_id, entry in message_id_map.items():
             if msg_id and msg_id.strip("<>") in in_reply_to:
                 matched_entry = entry
                 break
+
+        # Strategy 2: fallback — match by expert email (for pre-fix entries with null message_id)
+        if not matched_entry and from_addr:
+            for entry in pending:
+                if entry.get("expert_email") and entry["expert_email"].lower() in from_addr.lower():
+                    # Only match if this entry hasn't been matched yet
+                    if entry.get("reply_status") == "pending":
+                        matched_entry = entry
+                        break
+
+        # Strategy 3: fallback — match by expert name in subject
+        if not matched_entry:
+            for entry in pending:
+                name = entry.get("expert_name", "")
+                if name and name in subject and entry.get("reply_status") == "pending":
+                    matched_entry = entry
+                    break
 
         if not matched_entry:
             continue
