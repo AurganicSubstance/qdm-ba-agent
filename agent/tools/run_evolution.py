@@ -129,8 +129,10 @@ def _call_opencode(prompt: str, timeout: int = 300) -> str:
     return (result.stdout or "").strip()
 
 
-def _build_evolution_prompt(entry: dict, today_str: str) -> str:
-    """Build the prompt for OpenCode with expert feedback + file paths + instructions."""
+def _build_evolution_prompt(entry: dict, today_str: str, batch_date: str) -> str:
+    """Build the prompt for OpenCode with expert feedback + file paths + instructions.
+    today_str: used for evolution date stamps (header date)
+    batch_date: used for state key (the batch this evolution belongs to)"""
 
     question_text = entry.get("question", "")
     domain = entry.get("domain", "")
@@ -183,8 +185,8 @@ Expert reply from {expert_name} ({expert_email}):
 4. SCOPE: You may ONLY edit these 3 files. Do NOT touch .py, .sh, .env, state files,
    or any other files in the project. Use manage_state for state records (see below).
 
-5. After evolving, record it in state:
-   python -m agent.tools.manage_state --append "daily_runs.{today_str}.evolved" '{{"question_id":"{question_id}","action":"<which_file>","description":"<one-line Chinese summary>"}}'"""
+5. After evolving, record it in state under the batch that was sent:
+   python -m agent.tools.manage_state --append "daily_runs.{batch_date}.evolved" '{{"question_id":"{question_id}","action":"<which_file>","description":"<one-line Chinese summary>"}}'"""
 
 
 def _parse_evolution_summary(stdout: str) -> dict:
@@ -238,7 +240,8 @@ def main():
     with open(STATE_FILE, 'r', encoding='utf-8') as f:
         state = json.load(f)
 
-    sent_entries = state.get("daily_runs", {}).get(today_str, {}).get("sent", [])
+    batch_date = summary.get("batch_date") or today_str
+    sent_entries = state.get("daily_runs", {}).get(batch_date, {}).get("sent", [])
 
     for question_id in summary["actionable"]:
         # Find the full entry
@@ -249,7 +252,7 @@ def main():
 
         print(f"[EVOLVE] Processing: {entry['question'][:80]}...", file=sys.stderr)
 
-        prompt = _build_evolution_prompt(entry, today_str)
+        prompt = _build_evolution_prompt(entry, today_str, batch_date)
 
         if dry_run:
             print(f"[DRY-RUN] Would call OpenCode with prompt ({len(prompt)} chars)", file=sys.stderr)
@@ -289,7 +292,7 @@ def main():
 
         for ev in evolutions:
             entry = next(
-                (e for e in state.get("daily_runs", {}).get(today_str, {}).get("sent", [])
+                (e for e in state.get("daily_runs", {}).get(batch_date, {}).get("sent", [])
                  if e.get("question_id") == ev["question_id"]),
                 None,
             )

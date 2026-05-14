@@ -117,7 +117,7 @@ def collect_feedback(dry_run: bool = False) -> dict:
     }
     """
     summary = {"total_sent": 0, "replied": 0, "correct": 0, "incorrect": 0,
-               "unclear": 0, "followups_sent": 0, "actionable": []}
+               "unclear": 0, "followups_sent": 0, "actionable": [], "batch_date": None}
 
     state = _load_state()
     today = datetime.now().strftime("%Y-%m-%d")
@@ -132,6 +132,8 @@ def collect_feedback(dry_run: bool = False) -> dict:
 
     if not today_key:
         return summary
+
+    summary["batch_date"] = today_key
 
     pending = [e for e in state["daily_runs"].get(today_key, {}).get("sent", [])
                if e.get("reply_status") == "pending"]
