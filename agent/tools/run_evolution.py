@@ -78,7 +78,7 @@ def _detect_changes(before: dict) -> list:
 
 
 def _send_notification(evolutions: list):
-    """Send notification email to USER_EMAIL listing what changed."""
+    """Send notification email to USER_EMAIL listing what changed, who reported it, and the diff."""
     from agent.email_sender import _SimpleMailClient
 
     now = datetime.now()
@@ -86,8 +86,20 @@ def _send_notification(evolutions: list):
 
     items = ""
     for ev in evolutions:
-        items += f"<li><b>{ev['question'][:60]}...</b><br>"
-        items += f"→ {ev['target_file']}: {ev['description']}</li>\n"
+        expert = ev.get("expert_name", "?")
+        expert_email = ev.get("expert_email", "")
+        reply_excerpt = ev.get("reply_body", "")[:200]
+        diff_excerpt = ev.get("diff", "")[:800]
+
+        items += f"""
+<li style="margin-bottom:20px;">
+  <b>问题</b>: {ev['question'][:80]}...<br>
+  <b>专家</b>: {expert} ({expert_email})<br>
+  <b>反馈</b>: {reply_excerpt}<br>
+  <b>修改文件</b>: {ev['target_file']}<br>
+  <b>说明</b>: {ev['description']}<br>
+  <pre style="background:#2d2d2d;color:#f8f8f2;padding:8px;font-size:10px;overflow-x:auto;max-height:200px;">{diff_excerpt}</pre>
+</li>"""
 
     body = f"""<h2>取数Agent 技能进化</h2>
 <p><b>{ts}</b> — 专家验证触发了以下技能文件更新：</p>
@@ -243,46 +255,92 @@ def main():
     batch_date = summary.get("batch_date") or today_str
     sent_entries = state.get("daily_runs", {}).get(batch_date, {}).get("sent", [])
 
+    print("=" * 60, file=sys.stderr)
+    print(f"BATCH: {batch_date} | {len(summary['actionable'])} actionable reply(s)", file=sys.stderr)
+    print("=" * 60, file=sys.stderr)
+
     for question_id in summary["actionable"]:
-        # Find the full entry
         entry = next((e for e in sent_entries if e.get("question_id") == question_id), None)
         if not entry:
-            print(f"[WARN] Question {question_id} not found in today's sent entries", file=sys.stderr)
+            print(f"[WARN] Question {question_id} not found in batch {batch_date}", file=sys.stderr)
             continue
 
-        print(f"[EVOLVE] Processing: {entry['question'][:80]}...", file=sys.stderr)
+        # ── Print detailed context ──
+        print(f"\n{'─' * 50}", file=sys.stderr)
+        print(f"QUESTION: {entry['question']}", file=sys.stderr)
+        print(f"DOMAIN:   {entry.get('domain', '?')}", file=sys.stderr)
+        print(f"EXPERT:   {entry.get('expert_name', '?')} ({entry.get('expert_email', '?')})", file=sys.stderr)
+        print(f"REPLY:    {entry.get('reply_body', '')[:300]}", file=sys.stderr)
+        print(f"{'─' * 50}", file=sys.stderr)
 
         prompt = _build_evolution_prompt(entry, today_str, batch_date)
 
         if dry_run:
             print(f"[DRY-RUN] Would call OpenCode with prompt ({len(prompt)} chars)", file=sys.stderr)
-            print(f"[DRY-RUN] Prompt preview:\n{prompt[:500]}...\n", file=sys.stderr)
             continue
 
+        # ── Call OpenCode ──
         try:
             stdout = _call_opencode(prompt)
-            print(f"[OPECODE] Output: {stdout[:300]}...", file=sys.stderr)
         except RuntimeError as e:
             print(f"[ERROR] OpenCode call failed: {e}", file=sys.stderr)
             continue
 
-        # 5. Detect which files changed
+        # ── Detect what changed ──
         new_changes = _detect_changes(before_snapshot)
         parsed = _parse_evolution_summary(stdout)
 
         for key in new_changes:
             changed_files.add(key)
+            path = EVOLVABLE_FILES[key]
+
+            # Show git diff of what OpenCode actually changed
+            try:
+                diff_result = subprocess.run(
+                    ["git", "diff", str(path)],
+                    capture_output=True, text=True,
+                    encoding="utf-8", errors="replace",
+                    cwd=str(PROJECT_ROOT),
+                    timeout=10,
+                )
+                diff_text = diff_result.stdout.strip()
+            except Exception:
+                diff_text = "(git diff unavailable)"
+
+            print(f"\n[EVOLVED] {path.name}", file=sys.stderr)
+            if parsed.get("description"):
+                print(f"  DESCRIPTION: {parsed['description']}", file=sys.stderr)
+            if diff_text:
+                # Show first 40 lines of diff for readability
+                diff_lines = diff_text.split("\n")
+                print(f"  DIFF ({len(diff_lines)} lines):", file=sys.stderr)
+                for line in diff_lines[:40]:
+                    print(f"    {line}", file=sys.stderr)
+                if len(diff_lines) > 40:
+                    print(f"    ... ({len(diff_lines) - 40} more lines)", file=sys.stderr)
+
             evolutions.append({
                 "question_id": question_id,
                 "question": entry["question"],
+                "expert_name": entry.get("expert_name", ""),
+                "expert_email": entry.get("expert_email", ""),
+                "reply_body": entry.get("reply_body", "")[:300],
                 "target_file": key,
                 "description": parsed.get("description", f"Updated {key}"),
+                "diff": diff_text[:2000] if diff_text else "",
             })
-            # Update before_snapshot so subsequent iterations see the new state
-            before_snapshot[key] = EVOLVABLE_FILES[key].stat().st_mtime
+            before_snapshot[key] = path.stat().st_mtime
 
         if not new_changes:
-            print(f"[EVOLVE] No files changed for {question_id} (OpenCode may have decided feedback wasn't actionable)", file=sys.stderr)
+            print(f"[EVOLVE] No files changed — feedback may not be actionable", file=sys.stderr)
+
+    # 5. Print evolution summary
+    if evolutions:
+        print(f"\n{'=' * 60}", file=sys.stderr)
+        print(f"EVOLUTION COMPLETE — {len(evolutions)} file(s) changed", file=sys.stderr)
+        for ev in evolutions:
+            print(f"  → {ev['target_file']}: {ev['description']}", file=sys.stderr)
+        print(f"{'=' * 60}", file=sys.stderr)
 
     # 6. Save state with evolution records (if not dry-run and files changed)
     if not dry_run and evolutions:
