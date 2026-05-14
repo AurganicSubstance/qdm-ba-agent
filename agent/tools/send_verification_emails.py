@@ -101,6 +101,7 @@ def main():
     # Send emails (max 3 questions per email)
     mail = _SimpleMailClient()
     sent = []
+    message_id_map = {}  # question_id → message_id for state update
 
     for email, group in groups.items():
         name = group["name"]
@@ -111,29 +112,39 @@ def main():
             chunk = qs[chunk_start:chunk_start + 3]
             html = _build_html(chunk, name, today_mmdd)
 
-            body_file = f"/tmp/email_body_{len(sent)}.html"
-            with open(body_file, 'w', encoding='utf-8') as f:
-                f.write(html)
-
             batch_num = f" ({chunk_start//3 + 1})" if len(qs) > 3 else ""
             subject = f"【取数验证】{today_mmdd} 数据取数验证 - {name}{batch_num}"
 
             try:
                 for addr in email.split(","):
                     addr = addr.strip()
-                    mail.send_email(
+                    result = mail.send_email(
                         to=addr,
                         subject=subject,
                         body=html,
                         content_type="html",
                         sender_name="取数验证Agent",
                     )
+                    msg_id = result.get("message_id") if isinstance(result, dict) else None
+                    if msg_id:
+                        for q in chunk:
+                            message_id_map[q["question_id"]] = msg_id
                 sent.append({"email": email, "name": name, "questions": len(chunk)})
                 print(f"[SENT] {email} ({name}): {len(chunk)} questions", file=sys.stderr)
             except Exception as e:
                 print(f"[ERROR] {email}: {e}", file=sys.stderr)
 
-        os.remove(body_file) if os.path.exists(body_file) else None
+    # Write message_ids back to state
+    if message_id_map:
+        state = json.loads(Path(STATE_FILE).read_text(encoding="utf-8"))
+        for entry in state["daily_runs"][today_str]["sent"]:
+            qid = entry.get("question_id")
+            if qid in message_id_map:
+                entry["message_id"] = message_id_map[qid]
+        tmp = str(STATE_FILE) + ".tmp"
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, STATE_FILE)
 
     print(json.dumps({"ok": True, "sent": len(sent), "to": [s["email"] for s in sent]}, ensure_ascii=False))
 

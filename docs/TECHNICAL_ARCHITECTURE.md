@@ -1,7 +1,7 @@
 # QDM BA Agent — Technical Architecture
 
 > 钱大妈 (QDM) 业务分析自动取数、专家验证、自进化 Agent
-> Last updated: 2026-05-13 (hybrid CC+Python architecture)
+> Last updated: 2026-05-14 (Heartbeat refactored to hybrid Python + OpenCode)
 
 ---
 
@@ -16,16 +16,18 @@
                    │                             │
             run_morning.sh                run_heartbeat.sh
                    │                             │
-     ┌─────────────┼─────────────┐        claude -p "..."
-     │             │             │              │
-  Step 1      Step 2 ×5     Step 3       Check replies
-  (Pure       (CC→SQL      (Pure         → Classify
-   Python)     Py→exec)     Python)       → Evolve skills
-     │             │             │         → Notify if changed
-     ▼             ▼             ▼
-  Direct       Claude Code   Template
-  DeepSeek     → SQL text    → HTML
-  API call     → Python DB   → SMTP
+     ┌─────────────┼─────────────┐     python -m agent.tools
+     │             │             │     .run_evolution
+  Step 1      Step 2 ×5     Step 3         │
+  (Pure       (CC→SQL      (Pure      ┌────┴────┐
+   Python)     Py→exec)     Python)   │         │
+     │             │             │   Python   OpenCode
+     ▼             ▼             ▼   (plumbing (agent:
+  Direct       Claude Code   Template IMAP,     read skill
+  DeepSeek     → SQL text    → HTML   classify, files,
+  API call     → Python DB   → SMTP   backup,   edit them,
+                                       notify)   record
+                                                 state)
 ```
 
 **Hybrid architecture — Claude Code for reasoning, Python for execution:**
@@ -35,7 +37,9 @@
 | 1. Question generation | — | Python (direct DeepSeek SDK) | Simple prompt→JSON, no tools needed, ~5s |
 | 2. SQL generation + DB | Claude Code (`-p --print`) | Python (`subprocess` → extract SQL → DB) | CC reasons about schema+question, Python runs DB |
 | 3. Email sending | — | Python (template fill + SMTP) | Deterministic, no LLM reasoning needed |
-| Heartbeat | Claude Code (`-p --print`) | Python tools | CC classifies reply text, calls tools for state/files |
+| Heartbeat: feedback + classify | — | Python (IMAP + direct DeepSeek SDK) | Routine: fetch emails, match reply headers, 3-label classify |
+| Heartbeat: evolve skills | OpenCode (`opencode run`) | Python (backup + change detect + notify) | OpenCode reads skill files, restructures/rewrites; Python handles plumbing |
+
 
 **Why hybrid?** DeepSeek V4 Pro hallucinates tool calls — outputs "I need your approval" text instead of invoking tools. Claude Code is kept for text reasoning (SQL generation, reply classification). All actual execution is Python calling Python.
 
@@ -65,6 +69,7 @@ QDM BA Agent/
 │       ├── db_query.py              # CLI: execute SQL → JSON rows
 │       ├── send_email.py            # CLI: send HTML email via SMTP
 │       ├── check_feedback.py        # CLI: fetch IMAP replies → JSON
+│       ├── run_evolution.py          # CLI: full heartbeat: feedback → evolve → notify
 │       └── manage_state.py          # CLI: read/write agent_state.json
 │
 ├── src/tools/
@@ -79,7 +84,8 @@ QDM BA Agent/
 │           └── sql_templates.md    # SQL patterns and expert corrections
 │
 └── data/
-    └── agent_state.json        # Persistent state (daily_runs → questions → results)
+    ├── agent_state.json        # Persistent state (daily_runs → questions → results)
+    └── backups/                # Skill file backups before evolution (local, gitignored)
 ```
 
 ---
@@ -126,7 +132,7 @@ Two code paths depending on table type:
 
 **Why two paths:** SKU/SPU tables only support `SELECT *` with `WHERE ym=` — individual column refs fail at the SQL engine level. DeepSeek ignores the `SELECT * only` rule in prompts, so we template-generate directly. Operation tables have complex filters (品类分层, 门店汇总维度, date conversion) where CC's reasoning adds value.
 
-**Why subprocess instead of tool calls:** DeepSeek V4 Pro can't reliably make Claude Code tool calls — it outputs "I need your approval" text. By calling `claude -p` as a subprocess, we get CC to output SQL text (which DeepSeek does well), then Python extracts and executes it (reliable). Subprocess uses `encoding="utf-8"` explicitly (default on Linux; required on Chinese Windows where system encoding is gbk).
+**Why subprocess instead of tool calls:** DeepSeek V4 Pro can't reliably make Claude Code tool calls — it outputs "I need your approval" text. By calling `claude -p` as a subprocess, we get CC to output SQL text (which DeepSeek does well), then Python extracts and executes it (reliable). Subprocess uses `encoding="utf-8"` explicitly (default on Linux; required on Chinese Windows where system encoding is gbk). OpenCode can substitute via the same subprocess pattern — see §13 for comparison and swap instructions.
 
 ### 3.3 `send_verification_emails` — Build HTML + send emails
 
@@ -245,18 +251,55 @@ For each question (index 0-4), `build_and_execute.py`:
 
 ## 5. Phase 2: HEARTBEAT (run_heartbeat.sh)
 
-Triggered hourly at :07 via cron. Uses Claude Code (`-p --print --verbose`).
+Triggered hourly at :07 via cron. Pure Python orchestration with OpenCode subprocess for evolution editing.
 
 ```
-Step 1: python -m agent.tools.check_feedback --hours 2
-Step 2: Classify each reply as correct/incorrect/unclear
-Step 3: For incorrect with clear fixes → append correction to sql_templates.md | data_dictionary.md | CLAUDE.md
-Step 4: Notify liangsheng1@qdama.cn ONLY if files changed. Exit silently otherwise.
+python -m agent.tools.run_evolution
 ```
 
-**Evolution rules:** NEVER delete. Only APPEND with date stamp `## 修正 (evolved YYYY-MM-DD)`.
+### Flow
 
-Note: Heartbeat still uses CC for the classification + evolution logic. If DeepSeek tool-use hallucination also blocks heartbeat, it will be refactored to the same hybrid pattern (CC text + Python execution).
+```
+1. _backup_skills()
+   └── Copy current skill files to backups/skills/YYYY-MM-DD_HHMMSS/ (local, gitignored)
+
+2. collect_feedback() (from feedback_collector.py)
+   ├── IMAP fetch (7-day window)
+   ├── Match replies via Message-ID header (in_reply_to)
+   ├── LLM classify: correct / incorrect / unclear (direct DeepSeek SDK)
+   ├── Send follow-up email for unclear replies
+   └── Return summary with actionable question_ids
+
+3. For each actionable (incorrect + detailed) reply:
+   ├── Build prompt with expert feedback + file paths
+   ├── Call OpenCode subprocess → reads skill files, edits them, records state
+   └── Detect which files changed (mtime comparison)
+
+4. Send notification to liangsheng1@qdama.cn ONLY if files changed
+```
+
+### Architecture
+
+| Component | What | How |
+|-----------|------|-----|
+| IMAP fetch + classification | Python | `feedback_collector.collect_feedback()` — uses direct DeepSeek SDK for 3-label classify |
+| Skill file backup | Python | `shutil.copy2()` to `backups/skills/TIMESTAMP/` — local safety net, gitignored |
+| Evolution editing | OpenCode agent | `opencode run --model deepseek/deepseek-v4-pro` — reads skill files, restructures/rewrites freely within 3 files |
+| File change detection | Python | mtime comparison before/after OpenCode run |
+| Notification email | Python | SMTP via `_SimpleMailClient` |
+
+### OpenCode Scope
+
+OpenCode may ONLY edit these 3 files:
+- `.claude/skills/dataqueryplus/references/sql_templates.md`
+- `.claude/skills/dataqueryplus/references/data_dictionary.md`
+- `CLAUDE.md` (project root)
+
+It may read `SKILL.md` for context. It must NOT touch agent code, config, state files, or anything else. State records go through `manage_state` Bash calls.
+
+### Why OpenCode with tool access
+
+The previous design (text-in/text-out via JSON) limited context — Python had to guess which file tails to send. With real tool access, OpenCode reads exactly what it needs from the skill files, makes nuanced decisions about which file(s) to touch, and restructures freely. Python snapshots before/after to detect what changed for notification.
 
 ---
 
@@ -405,7 +448,92 @@ Classify: correct / incorrect / unclear
 
 ---
 
-## 13. Known Issues & Mitigations
+## 13. OpenCode — Alternative to Claude Code
+
+OpenCode is an alternative AI coding CLI that can replace Claude Code in the hybrid architecture if needed. Both call DeepSeek V4 Pro under the hood — the difference is the CLI wrapper.
+
+### CLI Equivalent
+
+```bash
+# Claude Code (current)
+claude -p "<prompt>" --print
+
+# OpenCode (equivalent)
+opencode run --model deepseek/deepseek-v4-pro "<prompt>"
+```
+
+### Auth
+
+OpenCode uses its own credential store at `~/.local/share/opencode/auth.json`:
+
+```json
+{"deepseek": {"type": "api", "key": "sk-..."}}
+```
+
+Claude Code uses `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` env vars pointing at `ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic`.
+
+### SQL Quality Comparison (tested 2026-05-14)
+
+Both generate functionally correct SQL. Key differences observed across 2 test runs:
+
+| Aspect | Claude Code | OpenCode |
+|--------|------------|----------|
+| Backtick quoting of Chinese fields | Inconsistent — sometimes drops backticks on `日期` inside function calls | Consistent — backtick on ALL Chinese fields everywhere |
+| Date filter style | Varies (`FROM_UNIXTIME(..., 'yyyy-MM') =` vs range) | Consistently uses range (`>= ... AND < ...`) |
+| Div-zero handling | `NULLIF(SUM(...), 0)` — cleaner | `HAVING SUM(...) > 0` — works, slightly more verbose |
+| SQL block format | Clean ` ```sql ` blocks | Same, with CLI noise prefix (`> build · deepseek-v4-pro`) |
+
+### Speed Comparison (both DeepSeek V4 Pro, same prompt, 2 runs)
+
+| Run | Claude Code | OpenCode |
+|-----|------------|----------|
+| #1 (simple aggregation) | 25.3s | 36.9s |
+| #2 (top-N with percentage) | 46.2s | 40.0s |
+| **Average** | **35.8s** | **38.5s** |
+
+No meaningful speed difference. Both are bottlenecked by DeepSeek API latency, not CLI startup overhead.
+
+### Code Changes Required to Swap
+
+In `agent/tools/build_and_execute.py`, change the `_call_claude()` function:
+
+```python
+def _call_llm(sql_prompt: str, timeout: int = 180) -> str:
+    """Call LLM CLI to generate SQL. Supports both Claude Code and OpenCode."""
+    import shutil
+    # Auto-detect: prefer claude, fall back to opencode
+    if shutil.which("claude"):
+        cmd = ["claude", "-p", sql_prompt, "--print"]
+    elif shutil.which("opencode"):
+        cmd = ["opencode", "run", "--model", "deepseek/deepseek-v4-pro", sql_prompt]
+    else:
+        raise RuntimeError("No LLM CLI found (tried claude, opencode)")
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
+        cwd=str(ROOT),
+        env=os.environ.copy(),
+        timeout=timeout,
+    )
+    if result.returncode != 0:
+        stderr = result.stderr.strip() if result.stderr else ""
+        raise RuntimeError(f"LLM CLI exited {result.returncode}: {stderr[:200]}")
+    return (result.stdout or "").strip()
+```
+
+`_extract_sql()` needs no changes — both output ` ```sql ` blocks.
+
+### Verdict
+
+OpenCode is a viable drop-in replacement. It's slightly more disciplined about SQL quoting rules but has no compelling advantage over Claude Code for this use case. The choice comes down to:
+- **Stick with Claude Code**: already proven in pipeline, slightly cleaner output, fewer moving parts
+- **Swap to OpenCode**: if CC licensing changes, if you want independent auth management, or if CC's permission system causes issues in cron
+
+---
+
+## 14. Known Issues & Mitigations
 
 | Issue | Mitigation |
 |-------|------------|
@@ -415,5 +543,5 @@ Classify: correct / incorrect / unclear
 | SKU/SPU `SELECT *` on wide date range → DB 500 error | Always `LIMIT 20` in template SQL |
 | Windows subprocess encoding (Python defaults to gbk) | Explicit `encoding="utf-8"` in subprocess.run() |
 | DeepSeek CC retry timeout >120s | Smart skip: don't retry unfixable column errors on SKU tables |
-| Heartbeat may also have tool-use issues | If so, refactor to same hybrid pattern |
+| ~~Heartbeat tool-use hallucination~~ | RESOLVED 2026-05-14: Heartbeat refactored to pure Python + OpenCode subprocess (see §5). No Claude Code tool calls in heartbeat. |
 | LLM question generation sometimes fails | Fallback to 10 static template questions |

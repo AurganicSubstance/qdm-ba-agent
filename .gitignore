@@ -4,3 +4,4 @@ __pycache__/
 data/agent_state.json
 data/evolution_log.json
 *.log
+backups/
