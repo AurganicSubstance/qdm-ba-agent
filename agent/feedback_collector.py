@@ -221,7 +221,27 @@ def collect_feedback(dry_run: bool = False) -> dict:
                         break
 
         if not matched_entry:
-            print(f"[DETAIL] UNMATCHED: subject='{subject}' from='{from_addr}'", file=sys.stderr)
+            print(f"\n[DETAIL] UNMATCHED: subject='{subject}' from='{from_addr}' in_reply_to='{in_reply_to[:100]}'", file=sys.stderr)
+            # Strategy 1 diagnostics
+            print(f"  Strategy1 (message-id): map has {len(message_id_map)} keys", file=sys.stderr)
+            for mid in message_id_map:
+                clean = mid.strip("<>") if mid else ""
+                hit = clean in in_reply_to if clean else False
+                print(f"    msg_id='{mid[:60]}' in_reply_hit={hit}", file=sys.stderr)
+            # Strategy 2 diagnostics
+            batch_mmdd = today_key[5:]
+            batch_mmdd_slash = batch_mmdd.replace("-", "/")
+            s2_entered = ("取数验证" in subject and (batch_mmdd in subject or batch_mmdd_slash in subject))
+            print(f"  Strategy2 (subject): entered={s2_entered} batch='{batch_mmdd}'|'{batch_mmdd_slash}' subject_has_date={'YES' if (batch_mmdd in subject or batch_mmdd_slash in subject) else 'NO'}", file=sys.stderr)
+            if s2_entered:
+                for ei, entry in enumerate(pending):
+                    rs = entry.get("reply_status")
+                    has_evolved = entry.get("evolved")
+                    skip_rs = rs != "pending" and not (rs == "incorrect" and not has_evolved)
+                    email_hit = entry.get("expert_email", "").lower() in from_addr.lower() if entry.get("expert_email") else False
+                    name_hit = entry.get("expert_name", "") in subject if entry.get("expert_name") else False
+                    qid = entry.get("question_id") or entry.get("id")
+                    print(f"    entry[{ei}] qid={qid} expert={entry.get('expert_name')}/{entry.get('expert_email')} rs={rs} skip_rs={skip_rs} email_hit={email_hit} name_hit={name_hit}", file=sys.stderr)
             continue
 
         reply_body = email_data.get("body_text", "")
