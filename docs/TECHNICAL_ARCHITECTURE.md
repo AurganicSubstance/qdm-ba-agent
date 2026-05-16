@@ -1,7 +1,7 @@
 # QDM BA Agent — Technical Architecture
 
 > 钱大妈 (QDM) 业务分析自动取数、专家验证、自进化 Agent
-> Last updated: 2026-05-14 (Heartbeat refactored to hybrid Python + OpenCode)
+> Last updated: 2026-05-16 (Feedback collection: reply matching, classification heuristic, pending status fixes)
 
 ---
 
@@ -83,9 +83,11 @@ QDM BA Agent/
 │           ├── data_dictionary.md  # Table/field documentation
 │           └── sql_templates.md    # SQL patterns and expert corrections
 │
+├── backups/
+│   └── skills/                 # Skill file backups before evolution (local, gitignored)
+│
 └── data/
-    ├── agent_state.json        # Persistent state (daily_runs → questions → results)
-    └── backups/                # Skill file backups before evolution (local, gitignored)
+    └── agent_state.json        # Persistent state (daily_runs → questions → results)
 ```
 
 ---
@@ -264,9 +266,14 @@ python -m agent.tools.run_evolution
    └── Copy current skill files to backups/skills/YYYY-MM-DD_HHMMSS/ (local, gitignored)
 
 2. collect_feedback() (from feedback_collector.py)
+   ├── Load state, find latest batch with pending/unclear/incorrect-not-evolved entries
    ├── IMAP fetch (7-day window)
-   ├── Match replies via Message-ID header (in_reply_to)
-   ├── LLM classify: correct / incorrect / unclear (direct DeepSeek SDK)
+   ├── TWO-PASS match replies:
+   │   ├── Strategy 1: Message-ID header (in_reply_to) — exact, most reliable
+   │   └── Strategy 2: Subject date ("取数验证" + "05/15") + expert email/name — fallback
+   ├── Classify: heuristic pre-check → LLM (direct DeepSeek SDK)
+   │   ├── Pre-check: "不对" + SQL/table refs + >30 Chinese chars → "incorrect" (no LLM)
+   │   └── Full reply body (no truncation) → LLM 3-label: correct / incorrect / unclear
    ├── Send follow-up email for unclear replies
    └── Return summary with actionable question_ids
 
@@ -278,11 +285,44 @@ python -m agent.tools.run_evolution
 4. Send notification to liangsheng1@qdama.cn ONLY if files changed
 ```
 
+### Pending Entry Selection
+
+`collect_feedback()` finds the latest daily batch that has entries eligible for matching:
+
+| Status | Eligible? | Reason |
+|--------|-----------|--------|
+| `pending` | Yes | Not yet replied |
+| `unclear` | Yes | Re-evaluable — expert may reply again with more detail, or classifier may re-score the existing reply |
+| `incorrect` + `evolved=False` | Yes | Expert replied but evolution hasn't processed it yet |
+| `incorrect` + `evolved=True` | No | Already evolved |
+| `correct` | No | No action needed |
+
+### Reply Matching — Two Strategies
+
+**Strategy 1: Message-ID header** — The verification email's `Message-ID` header is stored in state. When the expert replies, their email client includes it in `In-Reply-To`. Direct lookup in `message_id_map`. Fastest and most reliable.
+
+**Strategy 2: Subject date + expert fallback** — Some email clients strip `In-Reply-To`. Fallback checks if the reply subject contains `取数验证` + batch date (both `05-15` and `05/15` formats), then matches by expert email or name in the subject. This catches replies from mobile clients and forwarded emails.
+
+**Caveat**: Multiple questions per email share the same `message_id`. Strategy 1 maps message_id to the last entry (dict overwrite), so only one question per email can be matched by Strategy 1. Strategy 2 has no such limitation — it iterates all pending entries.
+
+### Reply Classification
+
+**Heuristic pre-check** (runs before LLM, skips LLM on match):
+- Reply contains negative words: `不对`, `错了`, `不正确`, `有问题`, `错误`
+- AND contains SQL keywords (`SELECT`, `FROM`, `WHERE`, `JOIN`, `GROUP BY`) or known table references
+- AND has >30 Chinese characters
+- → Immediately classified as `incorrect` — no LLM call needed
+
+**LLM classification** (fallback):
+- Full reply body passed without truncation
+- LLM prompt explicitly instructs: SQL code in a reply = `incorrect` not `unclear`
+- Exception handler: if LLM call fails, uses heuristic fallback (>50 Chinese chars + negative words → `incorrect`)
+
 ### Architecture
 
 | Component | What | How |
 |-----------|------|-----|
-| IMAP fetch + classification | Python | `feedback_collector.collect_feedback()` — uses direct DeepSeek SDK for 3-label classify |
+| IMAP fetch + classification | Python | `feedback_collector.collect_feedback()` — heuristic pre-check + direct DeepSeek SDK for 3-label classify |
 | Skill file backup | Python | `shutil.copy2()` to `backups/skills/TIMESTAMP/` — local safety net, gitignored |
 | Evolution editing | OpenCode agent | `opencode run --model deepseek/deepseek-v4-pro` — reads skill files, restructures/rewrites freely within 3 files |
 | File change detection | Python | mtime comparison before/after OpenCode run |
@@ -311,29 +351,35 @@ The previous design (text-in/text-out via JSON) limited context — Python had t
 {
   "version": 2,
   "daily_runs": {
-    "2026-05-13": {
+    "2026-05-15": {
       "sent": [
         {
-          "id": "20260513_01",
+          "question_id": "20260515_01",
           "question": "...",
           "domain": "商品",
           "tables_hint": "product_center_business_sku_v3_info_di",
           "fields_hint": "articleName, totalSaleAmt, areaName, ym",
           "expert_name": "刘阗",
           "expert_email": "liutian1@qdama.cn",
+          "message_id": "<20260515101234.a1b2c3@qdama.cn>",
           "sql": "SELECT * FROM ...",
           "status": "success",
           "columns": ["col1", "col2"],
           "row_count": 10,
-          "rows": [["val1", "val2"], ...],
-          "reply_status": null,
-          "reply_body": null
+          "rows": [{"col1": "val1", "col2": "val2"}, ...],
+          "reply_status": "incorrect",
+          "reply_body": "SQL没加品类分层='门店'导致数据重复...",
+          "reply_from": "liutian1@qdama.cn",
+          "replied_at": "2026-05-15T10:30:00",
+          "followup_sent": false,
+          "evolved": true,
+          "evolution_target": "sql_templates",
+          "evolution_description": "运营宽表门店级查询补充品类分层过滤条件"
         }
       ],
-      "replied": [],
-      "correct": [],
-      "incorrect": [],
-      "evolved": []
+      "evolved": [
+        {"question_id": "20260515_01", "action": "sql_templates", "description": "运营宽表门店级查询补充品类分层过滤条件"}
+      ]
     }
   }
 }
@@ -392,13 +438,18 @@ Classify: correct / incorrect / unclear
        └── incorrect + clear fix:
               │
               ▼
-           Append to skill file:
+           OpenCode agent edits skill files:
            - sql_templates.md     (SQL pattern wrong)
            - data_dictionary.md   (field meaning wrong)
            - CLAUDE.md            (general rule needed)
+           (reads current state, restructures/rewrites freely)
+              │
+              ▼
+           Python detects file changes (mtime diff)
               │
               ▼
            Notify 梁晟 (liangsheng1@qdama.cn)
+           with expert name, reply, file changed, diff
 ```
 
 ---
@@ -543,5 +594,11 @@ OpenCode is a viable drop-in replacement. It's slightly more disciplined about S
 | SKU/SPU `SELECT *` on wide date range → DB 500 error | Always `LIMIT 20` in template SQL |
 | Windows subprocess encoding (Python defaults to gbk) | Explicit `encoding="utf-8"` in subprocess.run() |
 | DeepSeek CC retry timeout >120s | Smart skip: don't retry unfixable column errors on SKU tables |
-| ~~Heartbeat tool-use hallucination~~ | RESOLVED 2026-05-14: Heartbeat refactored to pure Python + OpenCode subprocess (see §5). No Claude Code tool calls in heartbeat. |
+| ~~Heartbeat tool-use hallucination~~ | RESOLVED 2026-05-14: Heartbeat refactored to pure Python + OpenCode subprocess (see §5) |
 | LLM question generation sometimes fails | Fallback to 10 static template questions |
+| `question_id` vs `id` key mismatch across pipeline | RESOLVED 2026-05-16: `generate_questions` now sets both keys; all consumers use `.get()` fallback |
+| `reply_status` never initialized to "pending" | RESOLVED 2026-05-16: `send_verification_emails` sets `reply_status="pending"` when writing `message_id` |
+| `message_id` never saved to state (KeyError crash) | RESOLVED 2026-05-16: fixed `question_id`/`id` key mismatch in `send_verification_emails` |
+| LLM classifies detailed SQL replies as "unclear" | RESOLVED 2026-05-16: heuristic pre-check (不对 + SQL → incorrect), full reply body no truncation |
+| `unclear` entries excluded from re-evaluation | RESOLVED 2026-05-16: `unclear` entries now included in pending so expert's follow-up reply can re-classify |
+| Multiple questions per email share one message_id | KNOWN: Strategy 1 (dict) only keeps last entry per message_id. Strategy 2 (subject fallback) handles the rest. Acceptable — multiple replies to same email are rare. |
