@@ -163,7 +163,9 @@ def generate_questions(dry_run: bool = False) -> list[dict]:
 
     # Classify domain and assign expert for all questions
     for i, q in enumerate(questions):
-        q.setdefault("id", f"{today}_{i+1:02d}")
+        qid = f"{today}_{i+1:02d}"
+        q.setdefault("id", qid)
+        q.setdefault("question_id", qid)
         domain = _classify_domain(q["question"])
         q["domain"] = domain
         expert = _get_expert_for_domain(domain)

@@ -273,7 +273,7 @@ Output ONLY the corrected SQL in ```sql block."""
 
     print(json.dumps({
         "ok": status == "success",
-        "question_id": question["id"],
+        "question_id": question.get("question_id") or question.get("id"),
         "status": status,
         "sql": sql,
         "columns": columns,

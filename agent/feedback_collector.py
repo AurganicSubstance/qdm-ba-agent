@@ -38,17 +38,29 @@ def _get_imap_client():
 
 def _classify_reply(question_text: str, sql: str, reply_body: str) -> str:
     """Use LLM to classify expert reply as: correct, incorrect, unclear."""
+    # Pre-check: strong signal that the reply is a detailed correction
+    has_negative = bool(re.search(r'(不对|错了|不正确|有问题|错误)', reply_body))
+    has_sql = bool(re.search(r'\b(SELECT|FROM|WHERE|JOIN|GROUP\s+BY)\b', reply_body, re.IGNORECASE))
+    has_table = bool(re.search(r'(default_catalog|hive\.|ads_business_analysis|operation_center)', reply_body))
+    chinese_chars = len(re.findall(r'[一-鿿]', reply_body))
+
+    # If reply says "不对" AND contains SQL/table refs, it's a detailed correction — skip LLM
+    if has_negative and (has_sql or has_table) and chinese_chars > 30:
+        return "incorrect"
+
     prompt = f"""Classify this expert's reply to a data retrieval validation request.
 
 Original question: {question_text}
-SQL used: {sql}
+SQL used (truncated): {sql[:300]}
 
-Expert reply: {reply_body[:1500]}
+Expert reply: {reply_body}
 
 Classify as exactly one of:
-- correct: expert confirms the data retrieval is correct (words like "对", "正确", "没问题", "可以")
-- incorrect: expert says the data is wrong AND explains what's wrong (words like "不对", "错了", + specific correction)
-- unclear: expert says it's wrong but does NOT explain clearly what the correct approach is
+- incorrect: expert says the data retrieval is wrong (words like "不对", "错了", "不正确") AND provides a specific correction (mentions tables, fields, SQL, filter conditions, or calculation logic)
+- unclear: expert says it's wrong but does NOT give enough detail to fix the SQL (e.g. just "不对" or "再看看" without specifics)
+- correct: expert confirms the data is right, or doesn't dispute it
+
+IMPORTANT: if the reply contains SQL code (SELECT, FROM, WHERE), specific table names, or field names alongside a "不对", it is "incorrect" not "unclear".
 
 Reply with just one word: correct, incorrect, or unclear."""
 
@@ -65,6 +77,9 @@ Reply with just one word: correct, incorrect, or unclear."""
         else:
             return "correct"
     except Exception:
+        # If LLM fails, fall back to heuristic rather than defaulting to "unclear"
+        if has_negative and chinese_chars > 50:
+            return "incorrect"
         return "unclear"
 
 
@@ -125,7 +140,9 @@ def collect_feedback(dry_run: bool = False) -> dict:
     today_key = None
     for k in sorted(state.get("daily_runs", {}).keys(), reverse=True):
         run = state["daily_runs"].get(k, {})
-        pending = [e for e in run.get("sent", []) if e.get("reply_status") == "pending"]
+        pending = [e for e in run.get("sent", [])
+               if e.get("reply_status") == "pending"
+               or (e.get("reply_status") == "incorrect" and not e.get("evolved"))]
         if pending:
             today_key = k
             break
@@ -136,7 +153,8 @@ def collect_feedback(dry_run: bool = False) -> dict:
     summary["batch_date"] = today_key
 
     pending = [e for e in state["daily_runs"].get(today_key, {}).get("sent", [])
-               if e.get("reply_status") == "pending"]
+               if e.get("reply_status") == "pending"
+               or (e.get("reply_status") == "incorrect" and not e.get("evolved"))]
     if not pending:
         return summary
 
@@ -178,7 +196,9 @@ def collect_feedback(dry_run: bool = False) -> dict:
                 (batch_mmdd in subject or batch_mmdd_slash in subject)):
                 # Reply belongs to this batch — narrow by expert email or name
                 for entry in pending:
-                    if entry.get("reply_status") != "pending":
+                    # Skip already-matched entries (but accept "incorrect" not yet evolved)
+                    rs = entry.get("reply_status")
+                    if rs != "pending" and not (rs == "incorrect" and not entry.get("evolved")):
                         continue
                     if entry.get("expert_email") and entry["expert_email"].lower() in from_addr.lower():
                         matched_entry = entry
@@ -212,7 +232,7 @@ def collect_feedback(dry_run: bool = False) -> dict:
             summary["incorrect"] += 1
             # Check if explanation is detailed enough for skill evolution
             if _is_explanation_detailed(reply_body):
-                summary["actionable"].append(matched_entry["question_id"])
+                summary["actionable"].append(matched_entry.get("question_id") or matched_entry.get("id"))
         elif classification == "unclear":
             summary["unclear"] += 1
             # Send follow-up
@@ -228,7 +248,8 @@ def collect_feedback(dry_run: bool = False) -> dict:
                     summary["followups_sent"] += 1
                     matched_entry["followup_sent"] = True
 
-    _save_state(state)
+    if not dry_run:
+        _save_state(state)
     return summary
 
 

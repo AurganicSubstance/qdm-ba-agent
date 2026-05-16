@@ -128,7 +128,9 @@ def main():
                     msg_id = result.get("message_id") if isinstance(result, dict) else None
                     if msg_id:
                         for q in chunk:
-                            message_id_map[q["question_id"]] = msg_id
+                            qid = q.get("question_id") or q.get("id")
+                            if qid:
+                                message_id_map[qid] = msg_id
                 sent.append({"email": email, "name": name, "questions": len(chunk)})
                 print(f"[SENT] {email} ({name}): {len(chunk)} questions", file=sys.stderr)
             except Exception as e:
@@ -138,9 +140,10 @@ def main():
     if message_id_map:
         state = json.loads(Path(STATE_FILE).read_text(encoding="utf-8"))
         for entry in state["daily_runs"][today_str]["sent"]:
-            qid = entry.get("question_id")
-            if qid in message_id_map:
+            qid = entry.get("question_id") or entry.get("id")
+            if qid and qid in message_id_map:
                 entry["message_id"] = message_id_map[qid]
+                entry["reply_status"] = "pending"
         tmp = str(STATE_FILE) + ".tmp"
         with open(tmp, 'w', encoding='utf-8') as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
