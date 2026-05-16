@@ -141,7 +141,7 @@ def collect_feedback(dry_run: bool = False) -> dict:
     for k in sorted(state.get("daily_runs", {}).keys(), reverse=True):
         run = state["daily_runs"].get(k, {})
         pending = [e for e in run.get("sent", [])
-               if e.get("reply_status") == "pending"
+               if e.get("reply_status") in ("pending", "unclear")
                or (e.get("reply_status") == "incorrect" and not e.get("evolved"))]
         if pending:
             today_key = k
@@ -153,7 +153,7 @@ def collect_feedback(dry_run: bool = False) -> dict:
     summary["batch_date"] = today_key
 
     pending = [e for e in state["daily_runs"].get(today_key, {}).get("sent", [])
-               if e.get("reply_status") == "pending"
+               if e.get("reply_status") in ("pending", "unclear")
                or (e.get("reply_status") == "incorrect" and not e.get("evolved"))]
     if not pending:
         return summary
@@ -209,7 +209,7 @@ def collect_feedback(dry_run: bool = False) -> dict:
                 for entry in pending:
                     # Skip already-matched entries (but accept "incorrect" not yet evolved)
                     rs = entry.get("reply_status")
-                    if rs != "pending" and not (rs == "incorrect" and not entry.get("evolved")):
+                    if rs not in ("pending", "unclear") and not (rs == "incorrect" and not entry.get("evolved")):
                         continue
                     if entry.get("expert_email") and entry["expert_email"].lower() in from_addr.lower():
                         matched_entry = entry
