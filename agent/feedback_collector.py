@@ -172,6 +172,15 @@ def collect_feedback(dry_run: bool = False) -> dict:
         print(f"[ERROR] IMAP fetch failed: {e}")
         return summary
 
+    # ── Debug: print all fetched emails and pending questions ──
+    print(f"\n[DETAIL] === IMAP fetched {len(emails)} email(s) in last 7 days ===", file=sys.stderr)
+    for i, email_data in enumerate(emails):
+        print(f"  EMAIL #{i}: subject='{email_data.get('subject', '')}'  from='{email_data.get('from_address', '')}'  in_reply_to='{email_data.get('in_reply_to', '')[:80]}'", file=sys.stderr)
+    print(f"[DETAIL] === {len(pending)} pending question(s) in batch {today_key} ===", file=sys.stderr)
+    for i, e in enumerate(pending):
+        print(f"  Q#{i}: id={e.get('question_id') or e.get('id')}  domain={e.get('domain')}  expert={e.get('expert_email')}  msgid={'YES' if e.get('message_id') else 'NO'}  question='{e['question'][:80]}'", file=sys.stderr)
+    print(f"[DETAIL] === Matching... ===", file=sys.stderr)
+
     for email_data in emails:
         in_reply_to = email_data.get("in_reply_to", "")
         from_addr = email_data.get("from_address", "")
@@ -179,11 +188,13 @@ def collect_feedback(dry_run: bool = False) -> dict:
 
         # Match reply to original message
         matched_entry = None
+        match_method = None
 
         # Strategy 1: match by Message-ID header (most reliable, for post-fix emails)
         for msg_id, entry in message_id_map.items():
             if msg_id and msg_id.strip("<>") in in_reply_to:
                 matched_entry = entry
+                match_method = "message-id"
                 break
 
         # Strategy 2: fallback — match reply to current batch by date + expert
@@ -202,16 +213,20 @@ def collect_feedback(dry_run: bool = False) -> dict:
                         continue
                     if entry.get("expert_email") and entry["expert_email"].lower() in from_addr.lower():
                         matched_entry = entry
+                        match_method = "subject+expert"
                         break
                     if entry.get("expert_name") and entry["expert_name"] in subject:
                         matched_entry = entry
+                        match_method = "subject+name"
                         break
 
         if not matched_entry:
+            print(f"[DETAIL] UNMATCHED: subject='{subject}' from='{from_addr}'", file=sys.stderr)
             continue
 
         reply_body = email_data.get("body_text", "")
         if not reply_body.strip():
+            print(f"[DETAIL] MATCHED but empty body: subject='{subject}' method={match_method}", file=sys.stderr)
             continue
 
         classification = _classify_reply(
@@ -219,6 +234,9 @@ def collect_feedback(dry_run: bool = False) -> dict:
             matched_entry.get("sql", ""),
             reply_body,
         )
+
+        qid = matched_entry.get("question_id") or matched_entry.get("id")
+        print(f"[DETAIL] MATCHED: subject='{subject}' → Q={qid} method={match_method} classify={classification}", file=sys.stderr)
 
         summary["replied"] += 1
         matched_entry["reply_status"] = classification
