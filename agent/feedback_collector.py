@@ -239,6 +239,29 @@ def collect_feedback(dry_run: bool = False) -> dict:
                 if matched_entry:
                     break
 
+        # Strategy 3: match reply to follow-up email
+        # Follow-up subject: Re: 【取数验证】请帮忙澄清取数错误细节
+        # Expert reply subject: 回复：Re: 【取数验证】请帮忙澄清取数错误细节
+        if not matched_entry and "请帮忙澄清取数错误细节" in subject:
+            for batch_date in active_batches:
+                for entry in batch_pending.get(batch_date, []):
+                    if entry.get("reply_status") != "unclear":
+                        continue
+                    if not entry.get("followup_sent"):
+                        continue
+                    if entry.get("expert_email") and entry["expert_email"].lower() in from_addr.lower():
+                        matched_entry = entry
+                        match_method = f"followup-reply(batch {batch_date})"
+                        matched_batch = batch_date
+                        break
+                    if entry.get("expert_name") and entry["expert_name"] in subject:
+                        matched_entry = entry
+                        match_method = f"followup-reply+name(batch {batch_date})"
+                        matched_batch = batch_date
+                        break
+                if matched_entry:
+                    break
+
         if not matched_entry:
             print(f"\n[DETAIL] UNMATCHED: subject='{subject}' from='{from_addr}' in_reply_to='{in_reply_to[:100]}'", file=sys.stderr)
             # Strategy 1 diagnostics
