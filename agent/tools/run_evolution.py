@@ -252,17 +252,25 @@ def main():
     with open(STATE_FILE, 'r', encoding='utf-8') as f:
         state = json.load(f)
 
-    batch_date = summary.get("batch_date") or today_str
-    sent_entries = state.get("daily_runs", {}).get(batch_date, {}).get("sent", [])
+    batch_dates = summary.get("batch_dates") or [today_str]
+    # Build combined sent entries, qid→entry lookup, and qid→batch lookup
+    all_sent_entries = []
+    qid_to_batch = {}
+    for bd in batch_dates:
+        entries = state.get("daily_runs", {}).get(bd, {}).get("sent", [])
+        all_sent_entries.extend(entries)
+        for e in entries:
+            qid_to_batch[e.get("question_id") or e.get("id")] = bd
+    entry_by_qid = {e.get("question_id") or e.get("id"): e for e in all_sent_entries}
 
     print("=" * 60, file=sys.stderr)
-    print(f"BATCH: {batch_date} | {len(summary['actionable'])} actionable reply(s)", file=sys.stderr)
+    print(f"BATCHES: {', '.join(batch_dates)} | {len(summary['actionable'])} actionable reply(s)", file=sys.stderr)
     print("=" * 60, file=sys.stderr)
 
     for question_id in summary["actionable"]:
-        entry = next((e for e in sent_entries if e.get("question_id") == question_id), None)
+        entry = entry_by_qid.get(question_id)
         if not entry:
-            print(f"[WARN] Question {question_id} not found in batch {batch_date}", file=sys.stderr)
+            print(f"[WARN] Question {question_id} not found in batches {batch_dates}", file=sys.stderr)
             continue
 
         # ── Print detailed context ──
@@ -273,7 +281,7 @@ def main():
         print(f"REPLY:    {entry.get('reply_body', '')[:300]}", file=sys.stderr)
         print(f"{'─' * 50}", file=sys.stderr)
 
-        prompt = _build_evolution_prompt(entry, today_str, batch_date)
+        prompt = _build_evolution_prompt(entry, today_str, qid_to_batch.get(question_id, today_str))
 
         if dry_run:
             print(f"[DRY-RUN] Would call OpenCode with prompt ({len(prompt)} chars)", file=sys.stderr)
@@ -349,11 +357,15 @@ def main():
             state = json.load(f)
 
         for ev in evolutions:
-            entry = next(
-                (e for e in state.get("daily_runs", {}).get(batch_date, {}).get("sent", [])
-                 if e.get("question_id") == ev["question_id"]),
-                None,
-            )
+            entry = None
+            for bd in batch_dates:
+                entry = next(
+                    (e for e in state.get("daily_runs", {}).get(bd, {}).get("sent", [])
+                     if e.get("question_id") == ev["question_id"]),
+                    None,
+                )
+                if entry:
+                    break
             if entry:
                 entry["evolved"] = True
                 entry["evolution_target"] = ev["target_file"]

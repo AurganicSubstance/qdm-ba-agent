@@ -117,9 +117,25 @@ def _send_followup(original_message_id: str, expert_email: str, expert_name: str
         return False
 
 
+def _get_pending_entries(run: dict) -> list:
+    """Return entries in a daily run that are eligible for feedback matching."""
+    return [e for e in run.get("sent", [])
+            if e.get("reply_status") in ("pending", "unclear")
+            or (e.get("reply_status") == "incorrect" and not e.get("evolved"))]
+
+
+def _collect_active_batches(state: dict) -> list[str]:
+    """Return all batch dates that have pending entries, newest first."""
+    active = []
+    for k in sorted(state.get("daily_runs", {}).keys(), reverse=True):
+        if _get_pending_entries(state["daily_runs"].get(k, {})):
+            active.append(k)
+    return active
+
+
 def collect_feedback(dry_run: bool = False) -> dict:
     """
-    Collect expert replies and classify them.
+    Collect expert replies and classify them across ALL active batches.
 
     Returns summary: {
         "total_sent": int,
@@ -129,37 +145,20 @@ def collect_feedback(dry_run: bool = False) -> dict:
         "unclear": int,
         "followups_sent": int,
         "actionable": [list of question_ids with clear incorrect feedback],
+        "batch_dates": [list of processed batch dates],
     }
     """
     summary = {"total_sent": 0, "replied": 0, "correct": 0, "incorrect": 0,
-               "unclear": 0, "followups_sent": 0, "actionable": [], "batch_date": None}
+               "unclear": 0, "followups_sent": 0, "actionable": [],
+               "batch_dates": []}
 
     state = _load_state()
-    today = datetime.now().strftime("%Y-%m-%d")
+    active_batches = _collect_active_batches(state)
 
-    today_key = None
-    for k in sorted(state.get("daily_runs", {}).keys(), reverse=True):
-        run = state["daily_runs"].get(k, {})
-        pending = [e for e in run.get("sent", [])
-               if e.get("reply_status") in ("pending", "unclear")
-               or (e.get("reply_status") == "incorrect" and not e.get("evolved"))]
-        if pending:
-            today_key = k
-            break
-
-    if not today_key:
+    if not active_batches:
         return summary
 
-    summary["batch_date"] = today_key
-
-    pending = [e for e in state["daily_runs"].get(today_key, {}).get("sent", [])
-               if e.get("reply_status") in ("pending", "unclear")
-               or (e.get("reply_status") == "incorrect" and not e.get("evolved"))]
-    if not pending:
-        return summary
-
-    summary["total_sent"] = len(pending)
-    message_id_map = {e["message_id"]: e for e in pending if e.get("message_id")}
+    summary["batch_dates"] = active_batches
 
     mail = _get_imap_client()
     if not mail:
@@ -172,13 +171,30 @@ def collect_feedback(dry_run: bool = False) -> dict:
         print(f"[ERROR] IMAP fetch failed: {e}")
         return summary
 
+    # Build per-batch pending lists and combined message_id map
+    batch_pending = {}      # batch_date → [pending entries]
+    message_id_map = {}     # message_id → entry (across all batches, last write wins)
+
+    for batch_date in active_batches:
+        run = state["daily_runs"].get(batch_date, {})
+        pending = _get_pending_entries(run)
+        batch_pending[batch_date] = pending
+        summary["total_sent"] += len(pending)
+        for e in pending:
+            if e.get("message_id"):
+                message_id_map[e["message_id"]] = e
+
     # ── Debug: print all fetched emails and pending questions ──
     print(f"\n[DETAIL] === IMAP fetched {len(emails)} email(s) in last 7 days ===", file=sys.stderr)
     for i, email_data in enumerate(emails):
         print(f"  EMAIL #{i}: subject='{email_data.get('subject', '')}'  from='{email_data.get('from_address', '')}'  in_reply_to='{email_data.get('in_reply_to', '')[:80]}'", file=sys.stderr)
-    print(f"[DETAIL] === {len(pending)} pending question(s) in batch {today_key} ===", file=sys.stderr)
-    for i, e in enumerate(pending):
-        print(f"  Q#{i}: id={e.get('question_id') or e.get('id')}  domain={e.get('domain')}  expert={e.get('expert_email')}  msgid={'YES' if e.get('message_id') else 'NO'}  question='{e['question'][:80]}'", file=sys.stderr)
+    print(f"[DETAIL] === {len(active_batches)} active batch(es): {', '.join(active_batches)} ===", file=sys.stderr)
+    for batch_date in active_batches:
+        pending = batch_pending[batch_date]
+        print(f"  Batch {batch_date}: {len(pending)} pending question(s)", file=sys.stderr)
+        for e in pending:
+            qid = e.get("question_id") or e.get("id")
+            print(f"    Q {qid} domain={e.get('domain')} expert={e.get('expert_email')} rs={e.get('reply_status')} msgid={'YES' if e.get('message_id') else 'NO'} q='{e['question'][:80]}'", file=sys.stderr)
     print(f"[DETAIL] === Matching... ===", file=sys.stderr)
 
     for email_data in emails:
@@ -186,39 +202,42 @@ def collect_feedback(dry_run: bool = False) -> dict:
         from_addr = email_data.get("from_address", "")
         subject = email_data.get("subject", "")
 
-        # Match reply to original message
         matched_entry = None
         match_method = None
+        matched_batch = None
 
-        # Strategy 1: match by Message-ID header (most reliable, for post-fix emails)
+        # Strategy 1: match by Message-ID header (all batches)
         for msg_id, entry in message_id_map.items():
             if msg_id and msg_id.strip("<>") in in_reply_to:
                 matched_entry = entry
                 match_method = "message-id"
                 break
 
-        # Strategy 2: fallback — match reply to current batch by date + expert
-        # Verification email subjects: 【取数验证】05/14 数据取数验证 - ExpertName
-        # Expert replies contain: Re: 【取数验证】05/14 ... or 回复：【取数验证】05/14 ...
+        # Strategy 2: fallback — try each active batch's date
         if not matched_entry:
-            batch_mmdd = today_key[5:]  # "2026-05-14" → "05-14"
-            batch_mmdd_slash = batch_mmdd.replace("-", "/")  # "05/14"
-            if ("取数验证" in subject and
-                (batch_mmdd in subject or batch_mmdd_slash in subject)):
-                # Reply belongs to this batch — narrow by expert email or name
-                for entry in pending:
-                    # Skip already-matched entries (but accept "incorrect" not yet evolved)
+            for batch_date in active_batches:
+                batch_mmdd = batch_date[5:]           # "2026-05-14" → "05-14"
+                batch_mmdd_slash = batch_mmdd.replace("-", "/")  # "05/14"
+                if not ("取数验证" in subject and
+                        (batch_mmdd in subject or batch_mmdd_slash in subject)):
+                    continue
+                # Subject date matches this batch — search its entries
+                for entry in batch_pending.get(batch_date, []):
                     rs = entry.get("reply_status")
                     if rs not in ("pending", "unclear") and not (rs == "incorrect" and not entry.get("evolved")):
                         continue
                     if entry.get("expert_email") and entry["expert_email"].lower() in from_addr.lower():
                         matched_entry = entry
-                        match_method = "subject+expert"
+                        match_method = f"subject+expert(batch {batch_date})"
+                        matched_batch = batch_date
                         break
                     if entry.get("expert_name") and entry["expert_name"] in subject:
                         matched_entry = entry
-                        match_method = "subject+name"
+                        match_method = f"subject+name(batch {batch_date})"
+                        matched_batch = batch_date
                         break
+                if matched_entry:
+                    break
 
         if not matched_entry:
             print(f"\n[DETAIL] UNMATCHED: subject='{subject}' from='{from_addr}' in_reply_to='{in_reply_to[:100]}'", file=sys.stderr)
@@ -228,20 +247,21 @@ def collect_feedback(dry_run: bool = False) -> dict:
                 clean = mid.strip("<>") if mid else ""
                 hit = clean in in_reply_to if clean else False
                 print(f"    msg_id='{mid[:60]}' in_reply_hit={hit}", file=sys.stderr)
-            # Strategy 2 diagnostics
-            batch_mmdd = today_key[5:]
-            batch_mmdd_slash = batch_mmdd.replace("-", "/")
-            s2_entered = ("取数验证" in subject and (batch_mmdd in subject or batch_mmdd_slash in subject))
-            print(f"  Strategy2 (subject): entered={s2_entered} batch='{batch_mmdd}'|'{batch_mmdd_slash}' subject_has_date={'YES' if (batch_mmdd in subject or batch_mmdd_slash in subject) else 'NO'}", file=sys.stderr)
-            if s2_entered:
-                for ei, entry in enumerate(pending):
-                    rs = entry.get("reply_status")
-                    has_evolved = entry.get("evolved")
-                    skip_rs = rs != "pending" and not (rs == "incorrect" and not has_evolved)
-                    email_hit = entry.get("expert_email", "").lower() in from_addr.lower() if entry.get("expert_email") else False
-                    name_hit = entry.get("expert_name", "") in subject if entry.get("expert_name") else False
-                    qid = entry.get("question_id") or entry.get("id")
-                    print(f"    entry[{ei}] qid={qid} expert={entry.get('expert_name')}/{entry.get('expert_email')} rs={rs} skip_rs={skip_rs} email_hit={email_hit} name_hit={name_hit}", file=sys.stderr)
+            # Strategy 2 diagnostics — check each batch
+            for batch_date in active_batches:
+                batch_mmdd = batch_date[5:]
+                batch_mmdd_slash = batch_mmdd.replace("-", "/")
+                s2_entered = ("取数验证" in subject and (batch_mmdd in subject or batch_mmdd_slash in subject))
+                if s2_entered:
+                    print(f"  Strategy2 batch={batch_date}: entered=True", file=sys.stderr)
+                    for ei, entry in enumerate(batch_pending.get(batch_date, [])):
+                        rs = entry.get("reply_status")
+                        has_evolved = entry.get("evolved")
+                        skip_rs = rs not in ("pending", "unclear") and not (rs == "incorrect" and not has_evolved)
+                        email_hit = entry.get("expert_email", "").lower() in from_addr.lower() if entry.get("expert_email") else False
+                        name_hit = entry.get("expert_name", "") in subject if entry.get("expert_name") else False
+                        qid = entry.get("question_id") or entry.get("id")
+                        print(f"    entry[{ei}] qid={qid} expert={entry.get('expert_name')}/{entry.get('expert_email')} rs={rs} skip_rs={skip_rs} email_hit={email_hit} name_hit={name_hit}", file=sys.stderr)
             continue
 
         reply_body = email_data.get("body_text", "")
@@ -268,12 +288,10 @@ def collect_feedback(dry_run: bool = False) -> dict:
             summary["correct"] += 1
         elif classification == "incorrect":
             summary["incorrect"] += 1
-            # Check if explanation is detailed enough for skill evolution
             if _is_explanation_detailed(reply_body):
                 summary["actionable"].append(matched_entry.get("question_id") or matched_entry.get("id"))
         elif classification == "unclear":
             summary["unclear"] += 1
-            # Send follow-up
             if not dry_run:
                 sent = _send_followup(
                     matched_entry.get("message_id", ""),
