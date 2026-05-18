@@ -247,8 +247,6 @@ def collect_feedback(dry_run: bool = False) -> dict:
                 for entry in batch_pending.get(batch_date, []):
                     if entry.get("reply_status") != "unclear":
                         continue
-                    if not entry.get("followup_sent"):
-                        continue
                     if entry.get("expert_email") and entry["expert_email"].lower() in from_addr.lower():
                         matched_entry = entry
                         match_method = f"followup-reply(batch {batch_date})"
