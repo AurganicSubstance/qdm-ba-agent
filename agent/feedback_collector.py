@@ -243,22 +243,30 @@ def collect_feedback(dry_run: bool = False) -> dict:
         # Follow-up subject: Re: 【取数验证】请帮忙澄清取数错误细节
         # Expert reply subject: 回复：Re: 【取数验证】请帮忙澄清取数错误细节
         if not matched_entry and "请帮忙澄清取数错误细节" in subject:
-            for batch_date in active_batches:
-                for entry in batch_pending.get(batch_date, []):
-                    if entry.get("reply_status") != "unclear":
-                        continue
+            # Search ALL entries for this expert (not just pending), newest batch first.
+            # Prefer unclear → incorrect+evolved → any. The follow-up may contain
+            # useful feedback even for an already-evolved question.
+            candidates = []
+            for batch_date in sorted(state.get("daily_runs", {}).keys(), reverse=True):
+                for entry in state["daily_runs"][batch_date].get("sent", []):
                     if entry.get("expert_email") and entry["expert_email"].lower() in from_addr.lower():
-                        matched_entry = entry
-                        match_method = f"followup-reply(batch {batch_date})"
-                        matched_batch = batch_date
-                        break
-                    if entry.get("expert_name") and entry["expert_name"] in subject:
-                        matched_entry = entry
-                        match_method = f"followup-reply+name(batch {batch_date})"
-                        matched_batch = batch_date
-                        break
-                if matched_entry:
-                    break
+                        candidates.append((batch_date, entry))
+                        break  # one per batch is enough for candidate ranking
+            # Sort: prefer unclear > incorrect+evolved > pending > other
+            def _candidate_priority(item):
+                _, entry = item
+                rs = entry.get("reply_status", "")
+                if rs == "unclear":
+                    return 0
+                if rs == "incorrect" and entry.get("evolved"):
+                    return 1
+                if rs == "pending":
+                    return 2
+                return 3
+            candidates.sort(key=_candidate_priority)
+            if candidates:
+                matched_batch, matched_entry = candidates[0]
+                match_method = f"followup-reply(batch {matched_batch})"
 
         if not matched_entry:
             print(f"\n[DETAIL] UNMATCHED: subject='{subject}' from='{from_addr}' in_reply_to='{in_reply_to[:100]}'", file=sys.stderr)
