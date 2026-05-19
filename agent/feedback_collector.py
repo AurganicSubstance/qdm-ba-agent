@@ -309,7 +309,7 @@ def collect_feedback(dry_run: bool = False) -> dict:
 
         summary["replied"] += 1
         matched_entry["reply_status"] = classification
-        matched_entry["reply_body"] = reply_body[:1000]
+        matched_entry["reply_body"] = reply_body.replace("&nbsp;", " ").replace("&gt;", ">").replace("&lt;", "<").replace("&amp;", "&")[:1000]
         matched_entry["reply_from"] = email_data.get("from_address", "")
         matched_entry["replied_at"] = datetime.now().isoformat()
 
