@@ -155,6 +155,7 @@ def _build_evolution_prompt(entry: dict, today_str: str, batch_date: str) -> str
     # Truncate to keep prompt size manageable for DeepSeek latency
     if len(reply_body) > 2000:
         reply_body = reply_body[:2000] + "...(truncated)"
+    question_id = entry.get("question_id", "")
 
     sql_templates_path = EVOLVABLE_FILES["sql_templates"]
     data_dict_path = EVOLVABLE_FILES["data_dictionary"]
