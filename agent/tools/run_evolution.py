@@ -118,7 +118,7 @@ def _send_notification(evolutions: list):
 
 # ── Layer B: OpenCode Harness ─────────────────────────────────────────
 
-def _call_opencode(prompt: str, timeout: int = 600) -> str:
+def _call_opencode(prompt: str, timeout: int = 1800) -> str:
     """Call OpenCode (or Claude Code as fallback) to evolve skill files."""
     if shutil.which("opencode"):
         cmd = ["opencode", "run", "--model", "deepseek/deepseek-v4-pro", prompt]
@@ -152,9 +152,6 @@ def _build_evolution_prompt(entry: dict, today_str: str, batch_date: str) -> str
     expert_name = entry.get("expert_name", "")
     expert_email = entry.get("expert_email", "")
     reply_body = (entry.get("reply_body", "") or "").replace("&nbsp;", " ").replace("&gt;", ">").replace("&lt;", "<").replace("&amp;", "&")
-    # Truncate to keep prompt size manageable for DeepSeek latency
-    if len(reply_body) > 2000:
-        reply_body = reply_body[:2000] + "...(truncated)"
     question_id = entry.get("question_id", "")
 
     sql_templates_path = EVOLVABLE_FILES["sql_templates"]
