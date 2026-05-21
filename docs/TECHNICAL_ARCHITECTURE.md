@@ -1,7 +1,7 @@
 # QDM BA Agent — Technical Architecture
 
 > 钱大妈 (QDM) 业务分析自动取数、专家验证、自进化 Agent
-> Last updated: 2026-05-16 (Feedback collection: reply matching, classification heuristic, pending status fixes)
+> Last updated: 2026-05-20 (Cross-batch reply matching, 3-strategy matching, HTML entity cleanup, 1800s evolution timeout)
 
 ---
 
@@ -266,16 +266,19 @@ python -m agent.tools.run_evolution
    └── Copy current skill files to backups/skills/YYYY-MM-DD_HHMMSS/ (local, gitignored)
 
 2. collect_feedback() (from feedback_collector.py)
-   ├── Load state, find latest batch with pending/unclear/incorrect-not-evolved entries
+   ├── Load state, collect ALL active batches (not just latest)
+   ├── Build combined message_id_map + per-batch pending lists
    ├── IMAP fetch (7-day window)
-   ├── TWO-PASS match replies:
+   ├── THREE-STRATEGY match replies:
    │   ├── Strategy 1: Message-ID header (in_reply_to) — exact, most reliable
-   │   └── Strategy 2: Subject date ("取数验证" + "05/15") + expert email/name — fallback
+   │   ├── Strategy 2: Subject date ("取数验证" + "MM/DD") + expert — tries EACH batch's date
+   │   └── Strategy 3: Follow-up subject ("请帮忙澄清取数错误细节") — matches any entry for that expert, preferring unclear > incorrect+evolved > pending
    ├── Classify: heuristic pre-check → LLM (direct DeepSeek SDK)
    │   ├── Pre-check: "不对" + SQL/table refs + >30 Chinese chars → "incorrect" (no LLM)
-   │   └── Full reply body (no truncation) → LLM 3-label: correct / incorrect / unclear
-   ├── Send follow-up email for unclear replies
-   └── Return summary with actionable question_ids
+   │   ├── Full reply body, HTML entities cleaned (&nbsp; → space etc)
+   │   └── LLM 3-label: correct / incorrect / unclear
+   ├── Send follow-up email for unclear replies (only if not dry-run)
+   └── Return summary with actionable question_ids + batch_dates list
 
 3. For each actionable (incorrect + detailed) reply:
    ├── Build prompt with expert feedback + file paths
@@ -285,25 +288,29 @@ python -m agent.tools.run_evolution
 4. Send notification to liangsheng1@qdama.cn ONLY if files changed
 ```
 
-### Pending Entry Selection
+### Cross-Batch Processing
 
-`collect_feedback()` finds the latest daily batch that has entries eligible for matching:
+`collect_feedback()` collects **all** active batches (not just the latest). Each batch's pending entries are built into per-batch lists, and a combined `message_id_map` spans all batches. Strategy 2 tries each batch's date against the reply subject. The summary returns `batch_dates: [list]` instead of a single `batch_date`.
+
+### Pending Entry Selection
 
 | Status | Eligible? | Reason |
 |--------|-----------|--------|
 | `pending` | Yes | Not yet replied |
-| `unclear` | Yes | Re-evaluable — expert may reply again with more detail, or classifier may re-score the existing reply |
+| `unclear` | Yes | Re-evaluable — expert may reply again with more detail, or improved classifier may re-score |
 | `incorrect` + `evolved=False` | Yes | Expert replied but evolution hasn't processed it yet |
 | `incorrect` + `evolved=True` | No | Already evolved |
 | `correct` | No | No action needed |
 
-### Reply Matching — Two Strategies
+### Reply Matching — Three Strategies
 
-**Strategy 1: Message-ID header** — The verification email's `Message-ID` header is stored in state. When the expert replies, their email client includes it in `In-Reply-To`. Direct lookup in `message_id_map`. Fastest and most reliable.
+**Strategy 1: Message-ID header** — The verification email's `Message-ID` header is stored in state. When the expert replies, their email client includes it in `In-Reply-To`. Direct lookup in combined `message_id_map` across all active batches.
 
-**Strategy 2: Subject date + expert fallback** — Some email clients strip `In-Reply-To`. Fallback checks if the reply subject contains `取数验证` + batch date (both `05-15` and `05/15` formats), then matches by expert email or name in the subject. This catches replies from mobile clients and forwarded emails.
+**Strategy 2: Subject date + expert fallback** — Some email clients strip `In-Reply-To`. For each active batch date, checks if the reply subject contains `取数验证` + that batch's date (both `05-15` and `05/15` formats), then matches by expert email or name. Iterates all pending entries in that batch.
 
-**Caveat**: Multiple questions per email share the same `message_id`. Strategy 1 maps message_id to the last entry (dict overwrite), so only one question per email can be matched by Strategy 1. Strategy 2 has no such limitation — it iterates all pending entries.
+**Strategy 3: Follow-up reply** — When a follow-up email (`Re: 【取数验证】请帮忙澄清取数错误细节`) was sent to an expert, their reply to it won't contain a batch date. Strategy 3 searches **all** entries (not just pending) for that expert across all batches, preferring `unclear` → `incorrect+evolved` → `pending`. Handles the case where the expert clarifies after the question was already evolved.
+
+**Caveat**: Multiple questions per email share the same `message_id`. Strategy 1 maps message_id to the last entry (dict overwrite), so only one question per email is matched by Strategy 1. Strategies 2 and 3 have no such limitation.
 
 ### Reply Classification
 
@@ -314,9 +321,13 @@ python -m agent.tools.run_evolution
 - → Immediately classified as `incorrect` — no LLM call needed
 
 **LLM classification** (fallback):
-- Full reply body passed without truncation
+- Full reply body passed without truncation; HTML entities cleaned (`&nbsp;` → ` `, `&gt;` → `>`, etc.)
 - LLM prompt explicitly instructs: SQL code in a reply = `incorrect` not `unclear`
 - Exception handler: if LLM call fails, uses heuristic fallback (>50 Chinese chars + negative words → `incorrect`)
+
+### Evolution Editing
+
+OpenCode subprocess timeout: **1800s** (30 min). Expert reply body passed in full (no char truncation) with HTML entities cleaned. Prompt includes question, domain, SQL used, expert reply, and paths to the 3 evolvable files. OpenCode reads `SKILL.md` for context, then edits `sql_templates.md`, `data_dictionary.md`, and/or `CLAUDE.md` as needed. Python detects changes via mtime comparison before/after.
 
 ### Architecture
 
@@ -473,10 +484,18 @@ Classify: correct / incorrect / unclear
 
 ```cron
 # Morning — daily at 16:30 China time
-30 16 * * * cd /root/qdm-ba-agent && bash run_morning.sh >> logs/morning.log 2>&1
+#30 16 * * * cd /root/qdm-ba-agent && bash run_morning.sh >> logs/morning.log 2>&1
 
 # Heartbeat — every hour at :07
-7 * * * * cd /root/qdm-ba-agent && bash run_heartbeat.sh >> logs/heartbeat.log 2>&1
+#7 * * * * cd /root/qdm-ba-agent && bash run_heartbeat.sh >> logs/heartbeat.log 2>&1
+```
+
+> **Status 2026-05-20**: Both jobs commented out for review. Re-enable by removing `#` prefix.
+
+### Re-enable
+
+```bash
+ssh root@8.138.41.205 "crontab -l | sed 's/^#30 16/30 16/; s/^#7 \* \* \*/7 * * */' | crontab -"
 ```
 
 ---
@@ -601,4 +620,8 @@ OpenCode is a viable drop-in replacement. It's slightly more disciplined about S
 | `message_id` never saved to state (KeyError crash) | RESOLVED 2026-05-16: fixed `question_id`/`id` key mismatch in `send_verification_emails` |
 | LLM classifies detailed SQL replies as "unclear" | RESOLVED 2026-05-16: heuristic pre-check (不对 + SQL → incorrect), full reply body no truncation |
 | `unclear` entries excluded from re-evaluation | RESOLVED 2026-05-16: `unclear` entries now included in pending so expert's follow-up reply can re-classify |
-| Multiple questions per email share one message_id | KNOWN: Strategy 1 (dict) only keeps last entry per message_id. Strategy 2 (subject fallback) handles the rest. Acceptable — multiple replies to same email are rare. |
+| Multiple questions per email share one message_id | KNOWN: Strategy 1 (dict) only keeps last entry per message_id. Strategies 2+3 handle the rest. |
+| ~~Heartbeat only checked latest batch~~ | RESOLVED 2026-05-20: `collect_feedback` now collects all active batches; combined `message_id_map`; Strategy 2 tries each batch's date; summary returns `batch_dates` list |
+| ~~OpenCode 300s timeout on huge prompts~~ | RESOLVED 2026-05-20: timeout raised to 1800s; HTML entities cleaned from reply bodies; no char truncation |
+| ~~Follow-up replies unmatched~~ | RESOLVED 2026-05-20: Strategy 3 matches follow-up replies ("请帮忙澄清取数错误细节") to the expert's entries across all batches |
+| ~~`question_id` NameError in evolution prompt~~ | RESOLVED 2026-05-20: restored `question_id` variable after accidental removal during HTML cleanup refactor |
